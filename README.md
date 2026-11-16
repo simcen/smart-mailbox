@@ -20,6 +20,7 @@ Der Dienst abonniert die Sensor-Topics und veröffentlicht (alle retained):
 - `briefkasten/status` – Status wie in `LOGIK.md` beschrieben
 - `briefkasten/sitzung` – letzte Sitzung: Ablauf der Rohereignisse, erkannter Fall, Begründung, vorher/nachher
 - `briefkasten/verlauf` – die letzten 12 Sitzungen
+- `briefkasten/empfang` – Empfangsdiagnose: jede Meldung auf den Sensor-Topics, auch die ignorierten
 - `briefkasten/online` – `online` / `offline`
 
 Befehle (`briefkasten/cmd/...`), im Dashboard als Knöpfe:
