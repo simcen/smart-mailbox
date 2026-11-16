@@ -15,6 +15,6 @@ services:
     volumes:
       - smart-mailbox-data:/data
     ports:
-      - "${PORT:-3000}:3000"
+      - "${HOST_PORT:-3180}:3000"
 volumes:
   smart-mailbox-data:

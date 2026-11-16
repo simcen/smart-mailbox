@@ -29,19 +29,20 @@ Befehle (`briefkasten/cmd/...`), im Dashboard als Knöpfe:
 - `brief_leer`, `paket_leer`, `alles_leer` – Status zurücksetzen
 
 Im Volume `/data` liegen `events.jsonl` (alle Rohereignisse), `sessions.jsonl` (Sitzungen samt Rückmeldung) und `state.json` (Status über Neustarts).
-Ohne Home Assistant zeigt `http://<host>:3000/` dieselbe Diagnose als Tabelle; `/health` ist der Healthcheck.
+Ohne Home Assistant zeigt `http://<host>:3180/` dieselbe Diagnose als Tabelle; `/health` ist der Healthcheck.
 
 ## Coolify
 
 1. Ordner in ein Git-Repository legen.
-2. In Coolify neues Projekt → Ressource aus dem Repository, Build Pack **Dockerfile** (Port 3000).
+2. In Coolify neues Projekt → Ressource aus dem Repository, Build Pack **Docker Compose** (oder Dockerfile, Port 3000).
 3. Umgebungsvariablen gemäss `.env.example` setzen; mindestens `MQTT_URL`, `TOPIC_SLOT`, `TOPIC_PARCEL`, bei drei Sensoren `TOPIC_LETTER`.
 4. Persistenten Speicher auf `/data` einhängen.
-5. Der Container muss den Broker `172.16.2.10:1883` im LAN erreichen. Eine öffentliche Domain braucht es nicht.
+5. Die Diagnose-Seite liegt auf Host-Port 3180 (Variable `HOST_PORT`); der Container selbst hört immer auf 3000.
+6. Der Container muss den Broker `172.16.2.10:1883` im LAN erreichen. Eine öffentliche Domain braucht es nicht.
 
 ## Schwellwerte nachstellen
 
 ```
-curl http://<host>:3000/api/events > events.jsonl
+curl http://<host>:3180/api/events > events.jsonl
 EMPTY_MIN=6 PEEK_SLOT=3 node service/replay.js events.jsonl
 ```
