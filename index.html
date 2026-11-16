@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Briefkasten-Simulator – Huber Alu 400</title>
+<style>
+  :root { --bg:#f3f4f2; --card:#fff; --ink:#1d2327; --mute:#6a747b; --line:#dfe3e1; --alu:#c9cfd2; --alu2:#aab2b6;
+          --ok:#2f7d4f; --warn:#b7791f; --bad:#b83a32; --acc:#1f5f8b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; } header span { color:var(--mute); }
+  main { display:grid; grid-template-columns:300px minmax(340px,1fr) minmax(320px,1fr); gap:14px; padding:14px; max-width:1500px; margin:auto; }
+  @media (max-width:1100px){ main{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 10px; }
+  button { font:inherit; cursor:pointer; border:1px solid var(--line); background:#fafbfa; border-radius:6px; padding:5px 9px; color:var(--ink); }
+  button:hover { border-color:var(--acc); } button:disabled { opacity:.45; cursor:default; }
+  label { display:flex; align-items:center; gap:8px; margin:6px 0; }
+  input[type=time], select { font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:6px; }
+  small, .mute { color:var(--mute); }
+
+  /* Briefkasten */
+  .box { width:230px; margin:6px auto 10px; background:linear-gradient(160deg,var(--alu),var(--alu2)); border-radius:6px; padding:12px; box-shadow:0 6px 16px #0002; user-select:none; }
+  .slotwrap { height:42px; background:#22282b; border-radius:3px; position:relative; perspective:300px; }
+  .flap { position:absolute; inset:0; background:linear-gradient(#dfe4e6,#b9c1c5); border-radius:3px; transform-origin:top; transition:transform .12s;
+          display:flex; align-items:center; justify-content:center; font-size:11px; color:#444; cursor:pointer; touch-action:none; }
+  .flap.open { transform:rotateX(-68deg); }
+  .brief { height:70px; margin:8px 0; background:#22282b; border-radius:3px; position:relative; perspective:400px; display:flex; align-items:center; justify-content:center; font-size:12px; color:#cfd6d9; text-align:center; }
+  .ldoor { position:absolute; inset:0; background:linear-gradient(#d9dee1,#b6bec2); border-radius:3px; transform-origin:bottom; transition:transform .15s; display:flex; align-items:center; justify-content:center; font-size:11px; color:#444; cursor:pointer; padding:0 6px; }
+  .ldoor.open { transform:rotateX(70deg); } .ldoor.blocked { cursor:not-allowed; color:#8a9296; }
+  .parcelwrap { height:150px; background:#22282b; border-radius:3px; position:relative; perspective:500px; color:#cfd6d9; display:flex; align-items:center; justify-content:center; font-size:12px; text-align:center; }
+  .door { position:absolute; inset:0; background:linear-gradient(#d5dbde,#b3bbbf); border-radius:3px; transform-origin:left; transition:transform .18s;
+          display:flex; align-items:center; justify-content:center; font-size:11px; color:#444; cursor:pointer; touch-action:none; }
+  .door.open { transform:rotateY(-72deg); }
+  .hold { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .hold button.on { background:var(--acc); color:#fff; border-color:var(--acc); }
+
+  /* Status */
+  .status { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .tile { border:1px solid var(--line); border-radius:8px; padding:10px; border-left:5px solid var(--mute); }
+  .tile.full { border-left-color:var(--ok); } .tile.unsure { border-left-color:var(--warn); }
+  .tile b { display:block; font-size:19px; } .tile i { font-style:normal; color:var(--mute); font-size:12px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px; background:#eef1f0; color:var(--mute); margin-left:4px; vertical-align:middle; }
+  .badge.warn { background:#fdf3dc; color:var(--warn); } .badge.bad { background:#fbe4e2; color:var(--bad); } .badge.ok { background:#e2f2e8; color:var(--ok); }
+  .alarm { margin-top:10px; padding:7px 10px; border-radius:6px; background:#fbe4e2; color:var(--bad); display:none; }
+  .alarm.show { display:block; }
+  #sess { margin-top:10px; color:var(--mute); min-height:20px; }
+  .cmp { margin-top:8px; padding:7px 10px; border-radius:6px; }
+  .cmp.ok { background:#e2f2e8; color:var(--ok); } .cmp.bad { background:#fbe4e2; color:var(--bad); }
+
+  .scn { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .scn h3 { grid-column:1/-1; font-size:12px; margin:8px 0 0; color:var(--mute); }
+  .scn button { text-align:left; } .scn button small { display:block; }
+  .params label { justify-content:space-between; } .params input { width:120px; } .params output { width:44px; text-align:right; font-variant-numeric:tabular-nums; }
+  .log { font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; background:#1e2428; color:#d4dadd; border-radius:6px; padding:8px 10px; height:170px; overflow:auto; white-space:pre-wrap; }
+  .log .t { color:#7f8c93; } .log .c { color:#8fd1a6; } .log .v { color:#e8c36f; }
+  pre { font:12px/1.45 ui-monospace,Menlo,Consolas,monospace; background:#1e2428; color:#d4dadd; border-radius:6px; padding:8px 10px; margin:0; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Briefkasten-Simulator</h1>
+  <span>Huber Alu 400 · 2 oder 3 Kontaktsensoren (Schlitzklappe, Paketfach, optional Brieffach-Türchen) · Logik in <code>mailbox-logic.js</code></span>
+</header>
+<main>
+  <!-- Spalte 1: Briefkasten + Kontext -->
+  <div>
+    <div class="card">
+      <h2>Briefkasten</h2>
+      <div class="box">
+        <div class="slotwrap"><div class="flap" id="flap">Briefschlitz – gedrückt halten</div></div>
+        <div class="brief"><span id="realBrief"></span><div class="ldoor blocked" id="ldoor"></div></div>
+        <div class="parcelwrap"><span id="realPaket"></span><div class="door" id="door">Paketfach – gedrückt halten</div></div>
+      </div>
+      <div class="hold">
+        <button id="lockSlot">Schlitz offen lassen</button>
+        <button id="lockParcel">Paketfach offen lassen</button>
+      </div>
+      <p class="mute" style="margin:10px 0 0">Schlitz und Paketfach gedrückt halten = Sensor «offen». Das Brieffach-Türchen lässt sich nur bei offenem Paketfach anklicken (dazu «Paketfach offen lassen»). Der Inhalt im Bild ist die <b>Realität</b>; sie ändert sich nur über die Szenarien-Knöpfe oder hier:</p>
+      <div class="hold" style="margin-top:6px">
+        <button id="realMail">Realität: +1 Brief</button><button id="realParcel">Realität: +1 Paket</button>
+        <button id="realEmptyM">Realität: Brieffach leer</button><button id="realEmptyP">Realität: Paketfach leer</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Kontext (Zusatzsignale)</h2>
+      <label>Uhrzeit <input type="time" id="time" value="12:00"> <span id="clock" class="mute"></span></label>
+      <div id="win" class="mute"></div>
+      <label><input type="checkbox" id="resident"> Bewohner in der Nähe <small>(Haustür / Präsenz)</small></label>
+      <label>Zeitraffer <select id="speed"><option value="1">1×</option><option value="4">4×</option><option value="10">10×</option></select></label>
+      <label><input type="checkbox" id="autoCtx" checked> Szenarien setzen Kontext und Ausgangslage selbst</label>
+      <label><input type="checkbox" id="letterDoor" checked> <b>3. Sensor</b> am Brieffach-Türchen</label>
+    </div>
+  </div>
+
+  <!-- Spalte 2: Status + Szenarien -->
+  <div>
+    <div class="card">
+      <h2>Anzeige in Home Assistant / Loxone (was die Logik glaubt)</h2>
+      <div class="status">
+        <div class="tile" id="tBrief"><i>Brieffach</i><b></b><span></span></div>
+        <div class="tile" id="tPaket"><i>Paketfach</i><b></b><span></span></div>
+      </div>
+      <div class="alarm" id="aSlot">⚠ Schlitz blockiert – etwas steckt in der Klappe</div>
+      <div class="alarm" id="aParcel">⚠ Paketfach steht offen</div>
+      <div id="sess"></div>
+      <div id="cmp"></div>
+      <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap">
+        <button data-man="brief_leer">Taster: Brieffach geleert</button>
+        <button data-man="paket_leer">Taster: Paketfach geleert</button>
+        <button id="resetAll">Alles zurücksetzen</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Szenarien</h2>
+      <div class="scn" id="scn"></div>
+    </div>
+  </div>
+
+  <!-- Spalte 3: Logs + Parameter -->
+  <div>
+    <div class="card">
+      <h2>Erkennung (Begründung)</h2>
+      <div class="log" id="logRes"></div>
+    </div>
+    <div class="card">
+      <h2>MQTT ein (Sensoren)</h2>
+      <div class="log" id="logIn" style="height:110px"></div>
+    </div>
+    <div class="card">
+      <h2>MQTT aus · <code>briefkasten/status</code> (retained)</h2>
+      <pre id="payload"></pre>
+    </div>
+    <div class="card params">
+      <h2>Schwellwerte (Sekunden)</h2>
+      <div id="params"></div>
+    </div>
+  </div>
+</main>
+
+<script src="mailbox-logic.js"></script>
+<script src="scenarios.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const TOPIC = { slot: 'zigbee2mqtt/briefkasten_schlitz', parcel: 'zigbee2mqtt/briefkasten_paketfach', letter: 'zigbee2mqtt/briefkasten_brieffach' };
+const PARAMS = [
+  ['debounce', 'Entprellen (Klappern)', 0.1, 1.5, 0.1],
+  ['peekParcel', 'Paketfach: reinlugen bis', 1, 8, 0.5],
+  ['emptyMin', 'Paketfach: Leerung ab', 4, 30, 1],
+  ['peekSlot', 'Schlitz: reinlugen ab', 1, 10, 0.5],
+  ['quiet', 'Ruhezeit bis Auswertung', 3, 60, 1],
+  ['slotStuck', 'Schlitz blockiert ab', 5, 120, 5],
+  ['parcelOpenAlarm', 'Paketfach-offen-Alarm ab', 10, 300, 10]
+];
+
+const sim = { t: 0, speed: 1, clockBase: 720, clockAt: 0, running: null, check: null };
+const sensors = { slot: false, parcel: false, letter: false };
+const held = { slot: false, parcel: false }, locked = { slot: false, parcel: false };
+const real = { mail: 0, parcel: 0 };
+const logic = new MailboxLogic.Logic({ letterDoor: true }, onResult);
+
+const clockMin = () => (sim.clockBase + (sim.t - sim.clockAt) / 60) % 1440;
+const ctx = () => ({ resident: $('#resident').checked, minuteOfDay: clockMin() });
+const hhmmss = () => { const s = Math.floor(clockMin() * 60); const p = n => String(n).padStart(2, '0');
+  return p(Math.floor(s / 3600)) + ':' + p(Math.floor(s / 60) % 60) + ':' + p(s % 60); };
+
+function log(el, html) { const d = $(el); d.insertAdjacentHTML('beforeend', '<div><span class="t">' + hhmmss() + '</span> ' + html + '</div>'); d.scrollTop = d.scrollHeight; }
+
+function setSensor(sensor, open) {
+  if (sensors[sensor] === open) return;
+  if (sensor === 'letter' && open && !sensors.parcel) return;      // mechanisch gesperrt
+  if (sensor === 'parcel' && !open && sensors.letter) setSensor('letter', false); // Türchen muss zuerst zu
+  sensors[sensor] = open;
+  if (sensor !== 'letter' || logic.cfg.letterDoor) {
+    log('#logIn', TOPIC[sensor] + ' <span class="v">{"contact": ' + (!open) + '}</span>');
+    logic.onContact(sensor, open, sim.t, ctx());
+  }
+  render();
+}
+function syncManual(sensor) { if (!sim.running) setSensor(sensor, held[sensor] || locked[sensor]); }
+
+function onResult(results, state, final) {
+  results.forEach(r => log('#logRes', '<span class="c">' + r.code + '</span> <span class="v">[' + r.konfidenz + ']</span> ' + r.text));
+  if (final && sim.check) {
+    const p = logic.payload();
+    const ok = (real.mail > 0) === (p.brieffach === 'post') && (real.parcel > 0) === (p.paketfach === 'belegt');
+    $('#cmp').innerHTML = '<div class="cmp ' + (ok ? 'ok' : 'bad') + '">' + (ok ? '✓' : '✗') + ' «' + sim.check + '»: Logik ' +
+      (ok ? 'stimmt mit der Realität überein.' : 'weicht von der Realität ab (real: ' + real.mail + ' Post, ' + real.parcel + ' Paket).') + '</div>';
+    sim.check = null;
+  }
+  render();
+}
+
+function tile(id, n, word, since, unsicher) {
+  const el = $(id);
+  el.className = 'tile' + (n > 0 ? ' full' : '') + (unsicher ? ' unsure' : '');
+  el.querySelector('b').innerHTML = (n > 0 ? word + ' (' + n + ')' : 'Leer') + (unsicher ? '<span class="badge warn">vermutet</span>' : '');
+  el.querySelector('span').textContent = since === null ? '' : 'seit ' + Math.round(sim.t - since) + ' s';
+}
+
+function render() {
+  const st = logic.state;
+  tile('#tBrief', st.brief.count, 'Post da', st.brief.since, st.brief.unsicher);
+  tile('#tPaket', st.paket.count, 'Paket da', st.paket.since, st.paket.unsicher);
+  $('#aSlot').classList.toggle('show', st.alarm.schlitz);
+  $('#aParcel').classList.toggle('show', st.alarm.paketOffen);
+  $('#flap').classList.toggle('open', sensors.slot);
+  $('#door').classList.toggle('open', sensors.parcel);
+  $('#ldoor').classList.toggle('open', sensors.letter);
+  $('#ldoor').classList.toggle('blocked', !sensors.parcel);
+  $('#ldoor').textContent = sensors.parcel ? 'Brieffach-Türchen – klicken' : 'Brieffach-Türchen (gesperrt, Paketfach zu)';
+  $('#realBrief').textContent = 'Brieffach (real): ' + (real.mail ? real.mail + '× Post' : 'leer');
+  $('#realPaket').textContent = 'Paketfach (real): ' + (real.parcel ? real.parcel + '× Paket' : 'leer');
+  $('#payload').textContent = JSON.stringify(logic.payload(), null, 2);
+  const pend = logic.pending(sim.t);
+  $('#sess').textContent = sim.running ? '▶ Szenario läuft: ' + sim.running.sc.name
+    : pend === null ? 'Keine offene Sitzung.'
+    : pend < 0 ? 'Sitzung läuft – Klappe offen …'
+    : 'Sitzung läuft – Auswertung in ' + pend.toFixed(0) + ' s (Ruhezeit)';
+  $('#clock').textContent = hhmmss();
+  const inW = logic.inWindow(clockMin());
+  const hm = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+  $('#win').innerHTML = 'Zustellfenster ' + logic.cfg.windows.map(w => hm(w[0]) + '–' + hm(w[1])).join(' / ') + ': <span class="badge ' + (inW ? 'ok">innerhalb' : '">ausserhalb') + '</span>';
+  document.querySelectorAll('#scn button').forEach(b => b.disabled = !!sim.running);
+}
+
+// --- Zeit ---
+let lastReal = performance.now();
+setInterval(() => {
+  const now = performance.now(), dt = Math.min(0.25, (now - lastReal) / 1000) * sim.speed; lastReal = now;
+  const steps = Math.max(1, Math.ceil(dt / 0.05));
+  for (let k = 0; k < steps; k++) {
+    sim.t += dt / steps;
+    const r = sim.running;
+    if (r) {
+      while (r.i < r.sc.steps.length && r.sc.steps[r.i][0] <= sim.t - r.t0) { const s = r.sc.steps[r.i++]; setSensor(s[1], s[2]); }
+      if (r.i >= r.sc.steps.length) { r.sc.truth(real); sim.check = r.sc.name; sim.running = null; }
+    }
+    logic.tick(sim.t, ctx());
+  }
+  render();
+}, 50);
+
+function setClock(v) { const [h, m] = v.split(':').map(Number); sim.clockBase = h * 60 + m; sim.clockAt = sim.t; $('#time').value = v; }
+
+function runScenario(sc) {
+  if (sim.running) return;
+  locked.slot = locked.parcel = false; $('#lockSlot').classList.remove('on'); $('#lockParcel').classList.remove('on');
+  setSensor('slot', false); setSensor('parcel', false);
+  if ($('#autoCtx').checked) {
+    setClock(sc.time); $('#resident').checked = sc.resident;
+    real.mail = sc.pre[0]; real.parcel = sc.pre[1];
+    logic.state.brief = { count: sc.pre[0], unsicher: false, since: sc.pre[0] ? sim.t : null };
+    logic.state.paket = { count: sc.pre[1], unsicher: false, since: sc.pre[1] ? sim.t : null };
+  }
+  $('#cmp').innerHTML = '';
+  log('#logRes', '— Szenario: ' + sc.name + ' (' + (logic.cfg.letterDoor ? 3 : 2) + ' Sensoren, vorher ' + real.mail + ' Post / ' + real.parcel + ' Paket) —');
+  sim.running = { sc: sc, t0: sim.t, i: 0 };
+}
+
+// --- UI aufbauen ---
+(function build() {
+  let g = '', html = '';
+  MailboxScenarios.forEach((sc, i) => {
+    if (sc.group !== g) { g = sc.group; html += '<h3>' + g + (g === 'Grenzfall' ? ' (bekannte Grenzen der Logik)' : g === 'Dritter Sensor' ? ' (mit 2 Sensoren falsch oder nur vermutet – Checkbox links umschalten)' : '') + '</h3>'; }
+    html += '<button data-i="' + i + '">' + sc.name + '<small>' + sc.time + (sc.resident ? ' · Bewohner nah' : '') + (sc.hint ? ' · ' + sc.hint : '') + '</small></button>';
+  });
+  $('#scn').innerHTML = html;
+  $('#scn').addEventListener('click', e => { const b = e.target.closest('button'); if (b) runScenario(MailboxScenarios[+b.dataset.i]); });
+
+  $('#params').innerHTML = PARAMS.map(p => '<label>' + p[1] + ' <span><input type="range" data-k="' + p[0] + '" min="' + p[2] + '" max="' + p[3] +
+    '" step="' + p[4] + '" value="' + logic.cfg[p[0]] + '"> <output>' + logic.cfg[p[0]] + '</output></span></label>').join('');
+  $('#params').addEventListener('input', e => { logic.cfg[e.target.dataset.k] = +e.target.value; e.target.nextElementSibling.textContent = e.target.value; });
+
+  [['slot', '#flap', '#lockSlot'], ['parcel', '#door', '#lockParcel']].forEach(([s, el, lk]) => {
+    const down = e => { e.preventDefault(); held[s] = true; syncManual(s); };
+    const up = () => { if (held[s]) { held[s] = false; syncManual(s); } };
+    $(el).addEventListener('pointerdown', down);
+    window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+    $(lk).addEventListener('click', () => { locked[s] = !locked[s]; $(lk).classList.toggle('on', locked[s]); syncManual(s); });
+  });
+
+  $('#ldoor').addEventListener('click', () => { if (!sim.running) setSensor('letter', !sensors.letter); });
+  $('#letterDoor').addEventListener('change', e => { logic.cfg.letterDoor = e.target.checked; });
+  $('#time').addEventListener('change', e => setClock(e.target.value));
+  $('#speed').addEventListener('change', e => sim.speed = +e.target.value);
+  document.querySelectorAll('[data-man]').forEach(b => b.addEventListener('click', () => logic.manual(b.dataset.man, sim.t)));
+  $('#resetAll').addEventListener('click', () => { logic.reset(); real.mail = real.parcel = 0; sim.running = sim.check = null;
+    sensors.slot = sensors.parcel = sensors.letter = false; locked.slot = locked.parcel = false; $('#lockSlot').classList.remove('on'); $('#lockParcel').classList.remove('on'); $('#cmp').innerHTML = ''; $('#logRes').innerHTML = ''; $('#logIn').innerHTML = ''; render(); });
+  $('#realMail').onclick = () => { real.mail++; render(); };
+  $('#realParcel').onclick = () => { real.parcel++; render(); };
+  $('#realEmptyM').onclick = () => { real.mail = 0; render(); };
+  $('#realEmptyP').onclick = () => { real.parcel = 0; render(); };
+  render();
+})();
+</script>
+</body>
+</html>

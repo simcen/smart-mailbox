@@ -1,0 +1,15 @@
+{
+  "name": "smart-mailbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Briefkasten-Logik als MQTT-Dienst (Huber Alu 400, Aqara-Kontaktsensoren)",
+  "scripts": {
+    "start": "node service/server.js",
+    "test": "node test.js",
+    "replay": "node service/replay.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.16.1"
+  },
+  "engines": { "node": ">=20" }
+}

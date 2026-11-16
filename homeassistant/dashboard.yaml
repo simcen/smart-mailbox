@@ -1,0 +1,138 @@
+# Diagnose-Dashboard «Briefkasten».
+# Einrichten: Einstellungen → Dashboards → Dashboard hinzufügen (leer) → öffnen → Bearbeiten →
+# ⋮ → Raw-Konfigurationseditor → diesen Inhalt einfügen.
+# Die Entitäten legt der Dienst per MQTT-Discovery selbst an (Gerät «Briefkasten»).
+title: Briefkasten
+views:
+  - title: Diagnose
+    icon: mdi:mailbox
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Status (was die Logik glaubt)
+          - type: tile
+            entity: sensor.briefkasten_brieffach
+            name: Brieffach
+          - type: tile
+            entity: sensor.briefkasten_paketfach
+            name: Paketfach
+          - type: entities
+            entities:
+              - entity: sensor.briefkasten_einwuerfe
+              - entity: sensor.briefkasten_pakete
+              - entity: binary_sensor.briefkasten_brieffach_unsicher
+              - entity: binary_sensor.briefkasten_paketfach_unsicher
+              - entity: binary_sensor.briefkasten_schlitz_blockiert
+              - entity: binary_sensor.briefkasten_paketfach_offen
+              - entity: binary_sensor.briefkasten_sitzung_aktiv
+              - entity: binary_sensor.briefkasten_zustellfenster
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Letzte Sitzung (Ereignis → Erkennung → Status)
+          - type: markdown
+            content: >-
+              {% set s = 'sensor.briefkasten_letzte_sitzung' %}
+              {% if states(s) in ['unknown', 'unavailable'] %}Noch keine Sitzung aufgezeichnet.{% else %}
+
+              **{{ states(s) }}** ({{ state_attr(s, 'konfidenz') }}) · {{ state_attr(s, 'zeit') }}
+
+
+              **Ablauf:** {{ state_attr(s, 'ablauf') }}
+
+
+              **Begründung:** {{ state_attr(s, 'begruendung') }}
+
+
+              **Post/Paket:** {{ state_attr(s, 'vorher').brief }}/{{ state_attr(s, 'vorher').paket }}
+              → {{ state_attr(s, 'nachher').brief }}/{{ state_attr(s, 'nachher').paket }}
+              · Zustellfenster: {{ 'ja' if state_attr(s, 'zustellfenster') else 'nein' }}
+              · Rückmeldung: {{ state_attr(s, 'feedback') }}
+              {% endif %}
+          - type: heading
+            heading: Rückmeldung zur letzten Sitzung
+            heading_style: subtitle
+          - type: button
+            entity: button.briefkasten_stimmt
+            name: Stimmt
+            show_state: false
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.briefkasten_stimmt
+          - type: button
+            entity: button.briefkasten_real_leer_leer
+            name: "Real: leer / leer"
+            show_state: false
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.briefkasten_real_leer_leer
+          - type: button
+            entity: button.briefkasten_real_post_leer
+            name: "Real: Post / leer"
+            show_state: false
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.briefkasten_real_post_leer
+          - type: button
+            entity: button.briefkasten_real_leer_paket
+            name: "Real: leer / Paket"
+            show_state: false
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.briefkasten_real_leer_paket
+          - type: button
+            entity: button.briefkasten_real_post_paket
+            name: "Real: Post / Paket"
+            show_state: false
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.briefkasten_real_post_paket
+          - type: entities
+            entities:
+              - entity: sensor.briefkasten_feedback_stimmt
+              - entity: sensor.briefkasten_feedback_falsch
+
+      - type: grid
+        column_span: 3
+        cards:
+          - type: heading
+            heading: Verlauf
+          - type: markdown
+            grid_options:
+              columns: full
+            content: >-
+              | Zeit | Ablauf | Erkannt | Post/Paket | Rückmeldung |
+
+              |---|---|---|---|---|
+
+              {% for x in state_attr('sensor.briefkasten_verlauf', 'sitzungen') or [] -%}
+
+              | {{ x.zeit }} | {{ x.ablauf }} | **{{ x.code }}** ({{ x.konfidenz }}) | {{ x.vorher }} → {{ x.nachher }} | {{ x.feedback }} |
+
+              {% endfor %}
+
+      # Rohdaten der Aqara-Sensoren: Entitäts-IDs anpassen, sobald die Sensoren in Home Assistant sichtbar sind.
+      # - type: grid
+      #   cards:
+      #     - type: heading
+      #       heading: Sensoren (roh)
+      #     - type: logbook
+      #       hours_to_show: 24
+      #       entities:
+      #         - binary_sensor.briefkasten_schlitz_contact
+      #         - binary_sensor.briefkasten_paketfach_contact
+      #         - binary_sensor.briefkasten_brieffach_contact
