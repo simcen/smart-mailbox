@@ -125,6 +125,40 @@ views:
 
               {% endfor %}
 
+      - type: grid
+        column_span: 3
+        cards:
+          - type: heading
+            heading: MQTT-Empfang (auch ignorierte Meldungen)
+          - type: markdown
+            grid_options:
+              columns: full
+            content: >-
+              {% set e = 'sensor.briefkasten_mqtt_empfang' %}
+              Meldungen seit Start des Dienstes: **{{ states(e) }}**
+
+
+              | Sensor | Topic | Meldungen | Ereignisse | Ignoriert | Zustand | Zuletzt | Letztes Ergebnis |
+
+              |---|---|---|---|---|---|---|---|
+
+              {% for x in state_attr(e, 'sensoren') or [] -%}
+
+              | {{ x.name }} | `{{ x.topic }}` | {{ x.meldungen }} | {{ x.ereignisse }} | {{ x.ignoriert }} | {{ x.zustand }} | {{ x.zuletzt or '–' }} | {{ x.ergebnis }} |
+
+              {% endfor %}
+
+
+              | Zeit | Sensor | Ergebnis | Payload |
+
+              |---|---|---|---|
+
+              {% for m in state_attr(e, 'letzte') or [] -%}
+
+              | {{ m.zeit }} | {{ m.sensor }} | {{ m.ergebnis }} | `{{ m.payload }}` |
+
+              {% endfor %}
+
       # Rohdaten der Aqara-Sensoren: Entitäts-IDs anpassen, sobald die Sensoren in Home Assistant sichtbar sind.
       # - type: grid
       #   cards:

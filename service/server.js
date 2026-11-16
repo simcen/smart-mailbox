@@ -51,6 +51,19 @@ let curEvents = [];                // Rohereignisse der laufenden Sitzung
 let presence = false;
 const sensorOpen = { slot: null, parcel: null, letter: null };
 const stats = { stimmt: 0, falsch: 0 };
+// Empfangsdiagnose: jede Meldung auf den Sensor-Topics, auch die ignorierten
+const rx = {};
+Object.keys(TOPICS).forEach(k => { if (TOPICS[k]) rx[k] = { topic: TOPICS[k], meldungen: 0, ereignisse: 0, ignoriert: 0, zuletzt: null, zustand: 'unbekannt', ergebnis: 'noch nichts empfangen' }; });
+let rxLog = [];                    // letzte Rohmeldungen (neueste zuerst)
+function received(sensor, t, buf, ergebnis, isEvent) {
+  const r = rx[sensor];
+  r.meldungen++; if (isEvent) r.ereignisse++; else r.ignoriert++;
+  r.zuletzt = stamp(t); r.ergebnis = ergebnis;
+  r.zustand = sensorOpen[sensor] === null ? 'unbekannt' : sensorOpen[sensor] ? 'offen' : 'zu';
+  rxLog.unshift({ zeit: stamp(t), sensor: NAME[sensor], ergebnis, payload: buf.toString().slice(0, 160) });
+  rxLog = rxLog.slice(0, 40);
+  publishRx();
+}
 
 try { const s = JSON.parse(fs.readFileSync(F.state, 'utf8')); logic.state.brief = s.brief; logic.state.paket = s.paket; logic.state.last = s.last; } catch (e) { /* erster Start */ }
 (function loadSessions() {
@@ -118,6 +131,7 @@ client.on('connect', () => {
   client.subscribe(BASE + '/cmd/#');
   publishDiscovery();
   publishAll();
+  publishRx();
 });
 client.on('error', e => console.error('MQTT-Fehler:', e.message));
 
@@ -128,10 +142,12 @@ client.on('message', (topic, buf) => {
   const sensor = Object.keys(TOPICS).find(k => TOPICS[k] === topic);
   if (!sensor) return;
   const open = parseOpen(buf);
-  if (open === null || sensorOpen[sensor] === open) return;          // unverändert (z.B. nur Batterie-Update)
+  if (open === null) return received(sensor, t, buf, 'ignoriert: Zustand nicht lesbar (Feld «' + CONTACT_FIELD + '» fehlt?)', false);
+  if (sensorOpen[sensor] === open) return received(sensor, t, buf, 'ignoriert: Zustand unverändert (' + (open ? 'offen' : 'zu') + ')', false);
   const first = sensorOpen[sensor] === null;
   sensorOpen[sensor] = open;
-  if (first && !open) return;                                        // Startzustand «zu» ist kein Ereignis
+  if (first && !open) return received(sensor, t, buf, 'ignoriert: Startzustand «zu»', false);
+  received(sensor, t, buf, 'Ereignis: ' + (open ? 'auf' : 'zu'), true);
   append(F.events, { t: +t.toFixed(3), zeit: stamp(t), sensor, open });
   curEvents.push({ t, sensor, open });
   logic.onContact(sensor, open, t, ctx(t));
@@ -183,11 +199,17 @@ function publishAll() {
   })) });
 }
 
+function publishRx() {
+  if (!client.connected) return;
+  const total = Object.values(rx).reduce((a, r) => a + r.meldungen, 0);
+  pub(BASE + '/empfang', { meldungen: total, sensoren: Object.keys(rx).map(k => Object.assign({ name: NAME[k] }, rx[k])), letzte: rxLog.slice(0, 10) });
+}
+
 function publishDiscovery() {
   const device = { identifiers: ['smart_mailbox'], name: 'Briefkasten', manufacturer: 'Eigenbau', model: 'Huber Alu 400 Logik' };
   const avail = { availability_topic: BASE + '/online' };
   const ent = (type, id, cfgx) => pub(DISC + '/' + type + '/smart_mailbox/' + id + '/config', Object.assign({
-    unique_id: 'smart_mailbox_' + id, default_entity_id: type + '.briefkasten_' + id, device
+    unique_id: 'smart_mailbox_' + id, default_entity_id: type + '.briefkasten_' + (id === 'empfang' ? 'mqtt_empfang' : id), device
   }, avail, cfgx));
   const st = BASE + '/status', tpl = k => '{{ value_json.' + k + ' }}', bin = k => "{{ 'ON' if value_json." + k + " else 'OFF' }}";
   ent('sensor', 'brieffach', { name: 'Brieffach', state_topic: st, value_template: tpl('brieffach'), icon: 'mdi:email' });
@@ -204,6 +226,7 @@ function publishDiscovery() {
   ent('sensor', 'feedback_falsch', { name: 'Rückmeldungen falsch', state_topic: st, value_template: tpl('feedback_falsch'), icon: 'mdi:close' });
   ent('sensor', 'letzte_sitzung', { name: 'Letzte Sitzung', state_topic: BASE + '/sitzung', value_template: tpl('code'), json_attributes_topic: BASE + '/sitzung', icon: 'mdi:magnify' });
   ent('sensor', 'verlauf', { name: 'Verlauf', state_topic: BASE + '/verlauf', value_template: tpl('anzahl'), json_attributes_topic: BASE + '/verlauf', icon: 'mdi:history' });
+  ent('sensor', 'empfang', { name: 'MQTT-Empfang', state_topic: BASE + '/empfang', value_template: tpl('meldungen'), json_attributes_topic: BASE + '/empfang', icon: 'mdi:access-point' });
   const btn = (id, name, cmd, payload, icon) => ent('button', id, { name, command_topic: BASE + '/cmd/' + cmd, payload_press: payload, icon });
   btn('stimmt', 'Letzte Erkennung stimmt', 'stimmt', '1', 'mdi:check-bold');
   btn('real_leer_leer', 'Real: keine Post, kein Paket', 'real', '0,0', 'mdi:mailbox-open-outline');
@@ -225,6 +248,7 @@ http.createServer((req, res) => {
   const send = (code, type, body) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8' }); res.end(body); };
   if (req.url === '/health') return send(client.connected ? 200 : 503, 'application/json', JSON.stringify({ mqtt: client.connected }));
   if (req.url === '/api/sessions') return send(200, 'application/json', JSON.stringify(sessions));
+  if (req.url === '/api/empfang') return send(200, 'application/json', JSON.stringify({ sensoren: rx, letzte: rxLog }));
   if (req.url === '/api/status') return send(200, 'application/json', JSON.stringify(logic.payload()));
   if (req.url === '/api/events') return send(200, 'application/x-ndjson', fs.existsSync(F.events) ? fs.readFileSync(F.events) : '');
   if (req.url === '/') {
@@ -233,6 +257,13 @@ http.createServer((req, res) => {
       '<style>body{font:14px system-ui;margin:20px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}</style>' +
       '<h1>Briefkasten-Diagnose</h1><p>Brieffach: <b>' + p.brieffach + '</b> (' + p.brieffach_einwuerfe + ') · Paketfach: <b>' + p.paketfach + '</b> (' + p.paketfach_anzahl +
       ') · Rückmeldungen: ' + stats.stimmt + ' stimmt, ' + stats.falsch + ' falsch · <a href="/api/events">Rohereignisse</a> · <a href="/api/sessions">Sitzungen (JSON)</a></p>' +
+      '<h2>MQTT-Empfang</h2><p>Broker: ' + (client.connected ? 'verbunden' : '<b>nicht verbunden</b>') + '</p>' +
+      '<table><tr><th>Sensor</th><th>Topic</th><th>Meldungen</th><th>davon Ereignisse</th><th>ignoriert</th><th>Zustand</th><th>Zuletzt</th><th>Letztes Ergebnis</th></tr>' +
+      Object.keys(rx).map(k => '<tr><td>' + NAME[k] + '</td><td>' + esc(rx[k].topic) + '</td><td>' + rx[k].meldungen + '</td><td>' + rx[k].ereignisse + '</td><td>' + rx[k].ignoriert +
+        '</td><td>' + rx[k].zustand + '</td><td>' + (rx[k].zuletzt || '–') + '</td><td>' + esc(rx[k].ergebnis) + '</td></tr>').join('') + '</table>' +
+      '<h3>Letzte Rohmeldungen</h3><table><tr><th>Zeit</th><th>Sensor</th><th>Ergebnis</th><th>Payload</th></tr>' +
+      rxLog.map(m => '<tr><td>' + m.zeit + '</td><td>' + m.sensor + '</td><td>' + esc(m.ergebnis) + '</td><td><code>' + esc(m.payload) + '</code></td></tr>').join('') + '</table>' +
+      '<h2>Sitzungen</h2>' +
       '<table><tr><th>Zeit</th><th>Ablauf</th><th>Erkannt</th><th>Vorher → Nachher (Post/Paket)</th><th>Begründung</th><th>Rückmeldung</th></tr>' +
       sessions.slice(0, 100).map(s => '<tr><td>' + s.zeit + '</td><td>' + esc(s.ablauf) + '</td><td>' + s.code + ' [' + s.konfidenz + ']</td><td>' +
         s.vorher.brief + '/' + s.vorher.paket + ' → ' + s.nachher.brief + '/' + s.nachher.paket + '</td><td>' + esc(s.ergebnisse.map(r => r.text).join(' ')) +
