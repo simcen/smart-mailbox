@@ -8,6 +8,7 @@ const path = require('path');
 const http = require('http');
 const mqtt = require('mqtt');
 const { Logic } = require('../mailbox-logic.js');
+const createStore = require('./store.js');
 
 const env = process.env;
 const num = (k, d) => (env[k] !== undefined && env[k] !== '' ? Number(env[k]) : d);
@@ -22,7 +23,7 @@ const HISTORY = 12;
 const LOW_VOLTAGE_MV = num('LOW_VOLTAGE_MV', 2850);   // darunter gilt die Batterie als schwach
 
 if (!TOPICS.slot || !TOPICS.parcel) { console.error('TOPIC_SLOT und TOPIC_PARCEL müssen gesetzt sein.'); process.exit(1); }
-fs.mkdirSync(DATA, { recursive: true });
+const store = createStore(env, DATA);
 
 const parseWindows = s => s.split(',').map(w => w.trim().split('-').map(x => { const [h, m] = x.split(':').map(Number); return h * 60 + (m || 0); }));
 const cfg = {
@@ -41,11 +42,6 @@ const fmtParts = new Intl.DateTimeFormat('de-CH', { timeZone: TZ, hour12: false,
 function local(t) { const p = {}; fmtParts.formatToParts(new Date(t * 1000)).forEach(x => p[x.type] = x.value); return p; }
 const minuteOfDay = t => { const p = local(t); return (+p.hour % 24) * 60 + +p.minute; };
 const stamp = t => { const p = local(t); return p.day + '.' + p.month + '. ' + p.hour + ':' + p.minute + ':' + p.second; };
-
-// ---------- Dateien ----------
-const F = { state: path.join(DATA, 'state.json'), events: path.join(DATA, 'events.jsonl'), sessions: path.join(DATA, 'sessions.jsonl') };
-const append = (f, o) => fs.appendFile(f, JSON.stringify(o) + '\n', e => e && console.error('Schreibfehler', f, e.message));
-const readLines = f => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean) : []);
 
 // ---------- Zustand ----------
 const logic = new Logic(cfg, onResult);
@@ -69,26 +65,28 @@ function received(sensor, t, buf, ergebnis, isEvent) {
   r.meldungen++; if (isEvent) r.ereignisse++; else r.ignoriert++;
   r.zuletzt = stamp(t); r.ergebnis = ergebnis;
   r.zustand = sensorOpen[sensor] === null ? 'unbekannt' : sensorOpen[sensor] ? 'offen' : 'zu';
-  rxLog.unshift({ zeit: stamp(t), sensor: NAME[sensor], ergebnis, payload: buf.toString().slice(0, 160) });
+  const payload = buf.toString().slice(0, 500);
+  rxLog.unshift({ zeit: stamp(t), sensor: NAME[sensor], ergebnis, payload });
   rxLog = rxLog.slice(0, 40);
+  store.addMessage({ t: +t.toFixed(3), zeit: stamp(t), sensor, topic: TOPICS[sensor], payload, ergebnis, isEvent });
   publishRx();
 }
 
-try { const s = JSON.parse(fs.readFileSync(F.state, 'utf8')); logic.state.brief = s.brief; logic.state.paket = s.paket; logic.state.last = s.last; Object.assign(battery, s.battery || {}); } catch (e) { /* erster Start */ }
-(function loadSessions() {
-  const byId = new Map();
-  for (const l of readLines(F.sessions)) {
-    if (l.typ === 'feedback') { const s = byId.get(l.id); if (s) s.feedback = l.feedback; }
-    else byId.set(l.id, l);
-  }
-  sessions = [...byId.values()].reverse().slice(0, 500);
+/** Gespeicherten Stand laden: Status, Sitzungen, Meldungs-Log und Zähler überleben so einen Neustart. */
+async function restore() {
+  const d = await store.init();
+  if (d.state) { logic.state.brief = d.state.brief; logic.state.paket = d.state.paket; logic.state.last = d.state.last; Object.assign(battery, d.state.battery || {}); }
+  sessions = d.sessions;
   recount();
-})();
+  rxLog = d.messages.map(m => ({ zeit: m.zeit, sensor: NAME[m.sensor] || m.sensor, ergebnis: m.ergebnis, payload: m.payload }));
+  Object.keys(rx).forEach(k => { const c = d.counts[k]; if (c) Object.assign(rx[k], { meldungen: c.meldungen, ereignisse: c.ereignisse, ignoriert: c.ignoriert, zuletzt: c.zuletzt, ergebnis: c.ergebnis }); });
+  console.log('Ablage:', store.kind, '|', sessions.length, 'Sitzungen,', Object.values(rx).reduce((a, r) => a + r.meldungen, 0), 'Meldungen geladen');
+}
 
 const ctx = t => ({ resident: presence, minuteOfDay: minuteOfDay(t) });
 const NAME = { slot: 'Schlitz', parcel: 'Paketfach', letter: 'Türchen' };
 
-const saveState = () => fs.writeFile(F.state, JSON.stringify({ brief: logic.state.brief, paket: logic.state.paket, last: logic.state.last, battery }), () => {});
+const saveState = () => store.saveState({ brief: logic.state.brief, paket: logic.state.paket, last: logic.state.last, battery });
 
 function onResult(results, state, final, diag) {
   const t = now();
@@ -109,7 +107,7 @@ function onResult(results, state, final, diag) {
     };
     curEvents = [];
     sessions.unshift(s); sessions = sessions.slice(0, 500);
-    append(F.sessions, s);
+    store.addSession(s);
     recount();
   }
   publishAll();
@@ -117,6 +115,7 @@ function onResult(results, state, final, diag) {
 
 // ---------- MQTT ----------
 const client = mqtt.connect(env.MQTT_URL || 'mqtt://localhost:1883', {
+  manualConnect: true,
   username: env.MQTT_USERNAME || undefined, password: env.MQTT_PASSWORD || undefined,
   will: { topic: BASE + '/online', payload: 'offline', retain: true }
 });
@@ -171,7 +170,7 @@ client.on('message', (topic, buf) => {
   sensorOpen[sensor] = open;
   if (first && !open) return received(sensor, t, buf, 'ignoriert: Startzustand «zu»', false);
   received(sensor, t, buf, 'Ereignis: ' + (open ? 'auf' : 'zu'), true);
-  append(F.events, { t: +t.toFixed(3), zeit: stamp(t), sensor, open });
+  store.addEvent({ t: +t.toFixed(3), zeit: stamp(t), sensor, open });
   curEvents.push({ t, sensor, open });
   logic.onContact(sensor, open, t, ctx(t));
   publishAll();
@@ -200,9 +199,9 @@ function rate(id, fb, t) {
   else if (fb.real) {
     const ok = (s.nachher.brief > 0) === !!fb.real.post && (s.nachher.paket > 0) === !!fb.real.paket;
     s.feedback = { stimmt: ok, real: { post: !!fb.real.post, paket: !!fb.real.paket }, zeit: stamp(t) };
-    if (!ok && s === sessions[0]) { recount(); append(F.sessions, { typ: 'feedback', id, feedback: s.feedback }); logic.setReal(!!fb.real.post, !!fb.real.paket, t); return true; }
+    if (!ok && s === sessions[0]) { recount(); store.setFeedback(id, s.feedback); logic.setReal(!!fb.real.post, !!fb.real.paket, t); return true; }
   } else { s.feedback = { stimmt: !!fb.stimmt, zeit: stamp(t) }; if (fb.aktion) s.feedback.aktion = String(fb.aktion).slice(0, 40); }
-  append(F.sessions, { typ: 'feedback', id, feedback: s.feedback });
+  store.setFeedback(id, s.feedback);
   recount();
   publishAll();
   return true;
@@ -296,7 +295,7 @@ setInterval(publishAll, 60000); // Zustellfenster / Lebenszeichen
 // ---------- HTTP: Health + Diagnose + Bewertung ----------
 const PAGE = fs.readFileSync(path.join(__dirname, 'page.html'), 'utf8');
 function body(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e5) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch (e) { r(null); } }); }); }
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   const send = (code, type, b) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
   const json = (code, o) => send(code, 'application/json', JSON.stringify(o));
   const url = req.url.split('?')[0];
@@ -315,16 +314,21 @@ http.createServer(async (req, res) => {
   }
   if (url === '/api/overview') {
     const t = now();
-    return json(200, { mqtt: client.connected, version: VERSION, gestartet: stamp(START), status: logic.payload(), sitzung_aktiv: logic.pending(t) !== null, stats,
+    return json(200, { mqtt: client.connected, version: VERSION, gestartet: stamp(START), ablage: store.kind, status: logic.payload(), sitzung_aktiv: logic.pending(t) !== null, stats,
       sensoren: Object.keys(rx).map(k => Object.assign({ key: k, name: NAME[k], batterie: battery[k] || null }, rx[k])),
       grenze_mv: LOW_VOLTAGE_MV, empfang: rxLog, sitzungen: sessions, neueste: sessions[0] ? sessions[0].id : null, zeit: stamp(t) });
   }
   if (url === '/api/sessions') return json(200, sessions);
   if (url === '/api/empfang') return json(200, { sensoren: rx, letzte: rxLog });
   if (url === '/api/status') return json(200, logic.payload());
-  if (url === '/api/events') return send(200, 'application/x-ndjson', fs.existsSync(F.events) ? fs.readFileSync(F.events) : '');
+  if (url === '/api/events') return send(200, 'application/x-ndjson', await store.eventsNdjson());
   if (url === '/') return send(200, 'text/html', PAGE);
   send(404, 'text/plain', 'not found');
-}).listen(num('PORT', 3000), () => console.log('HTTP auf Port', num('PORT', 3000)));
+});
 
-process.on('SIGTERM', () => { pub(BASE + '/online', 'offline'); client.end(false, {}, () => process.exit(0)); });
+restore().then(() => {
+  server.listen(num('PORT', 3000), () => console.log('HTTP auf Port', num('PORT', 3000)));
+  client.connect();
+}).catch(e => { console.error('Start fehlgeschlagen:', e.message); process.exit(1); });
+
+process.on('SIGTERM', () => { pub(BASE + '/online', 'offline'); client.end(false, {}, () => store.close().finally(() => process.exit(0))); });

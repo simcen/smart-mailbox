@@ -103,7 +103,7 @@ views:
               columns: full
             content: >-
               {% set e = 'sensor.briefkasten_mqtt_empfang' %}
-              Meldungen seit Start des Dienstes: **{{ states(e) }}**
+              Meldungen insgesamt: **{{ states(e) }}**
 
 
               | Sensor | Topic | Meldungen | Ereignisse | Ignoriert | Zustand | Zuletzt | Letztes Ergebnis |

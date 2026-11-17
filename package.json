@@ -9,7 +9,10 @@
     "replay": "node service/replay.js"
   },
   "dependencies": {
-    "mqtt": "^5.16.1"
+    "mqtt": "^5.16.1",
+    "pg": "^8.23.1"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

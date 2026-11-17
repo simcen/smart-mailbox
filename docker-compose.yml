@@ -3,6 +3,9 @@ services:
   smart-mailbox:
     build: .
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       MQTT_URL: ${MQTT_URL:-mqtt://172.16.2.10:1883}
       MQTT_USERNAME: ${MQTT_USERNAME:-}
@@ -11,11 +14,33 @@ services:
       TOPIC_PARCEL: ${TOPIC_PARCEL:-zigbee2mqtt/briefkasten_paketfach}
       TOPIC_LETTER: ${TOPIC_LETTER:-zigbee2mqtt/briefkasten_brieffach}
       WINDOWS: ${WINDOWS:-05:00-07:00,11:30-14:30}
+      PGHOST: db
+      PGUSER: mailbox
+      PGPASSWORD: ${SERVICE_PASSWORD_POSTGRES:-mailbox}
+      PGDATABASE: mailbox
       SOURCE_COMMIT: ${SOURCE_COMMIT:-}
       TZ: Europe/Zurich
     volumes:
       - smart-mailbox-data:/data
     ports:
       - "${HOST_PORT:-3180}:3000"
+
+  # Ablage für Meldungen, Ereignisse, Sitzungen und Status. Nur im Compose-Netz erreichbar.
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailbox
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES:-mailbox}
+      POSTGRES_DB: mailbox
+    volumes:
+      - smart-mailbox-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailbox -d mailbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
 volumes:
   smart-mailbox-data:
+  smart-mailbox-db:
