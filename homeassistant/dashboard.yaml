@@ -54,57 +54,25 @@ views:
               · Rückmeldung: {{ state_attr(s, 'feedback') }}
               {% endif %}
           - type: heading
-            heading: Rückmeldung zur letzten Sitzung
+            heading: Bewertung
             heading_style: subtitle
-          - type: button
-            entity: button.briefkasten_stimmt
-            name: Stimmt
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.briefkasten_stimmt
-          - type: button
-            entity: button.briefkasten_real_leer_leer
-            name: "Real: leer / leer"
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.briefkasten_real_leer_leer
-          - type: button
-            entity: button.briefkasten_real_post_leer
-            name: "Real: Post / leer"
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.briefkasten_real_post_leer
-          - type: button
-            entity: button.briefkasten_real_leer_paket
-            name: "Real: leer / Paket"
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.briefkasten_real_leer_paket
-          - type: button
-            entity: button.briefkasten_real_post_paket
-            name: "Real: Post / Paket"
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.briefkasten_real_post_paket
+          - type: markdown
+            content: >-
+              **{{ states('sensor.briefkasten_feedback_offen') }}** Sitzungen unbewertet
+              · {{ states('sensor.briefkasten_feedback_stimmt') }} stimmen
+              · {{ states('sensor.briefkasten_feedback_falsch') }} falsch
+
+
+              [Sitzungen bewerten (Diagnose-Seite)](http://172.16.2.10:3180/)
+          - type: heading
+            heading: Sensor-Batterien
+            heading_style: subtitle
           - type: entities
             entities:
-              - entity: sensor.briefkasten_feedback_stimmt
-              - entity: sensor.briefkasten_feedback_falsch
+              - entity: binary_sensor.briefkasten_batterie_schwach
+              - entity: sensor.briefkasten_spannung_schlitz
+              - entity: sensor.briefkasten_spannung_paketfach
+              - entity: sensor.briefkasten_spannung_tuerchen
 
       - type: grid
         column_span: 3

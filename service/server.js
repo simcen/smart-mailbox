@@ -35,6 +35,8 @@ const cfg = {
 
 // ---------- Zeit ----------
 const now = () => Date.now() / 1000;
+const START = now();
+const VERSION = (env.SOURCE_COMMIT || '').slice(0, 7) || 'unbekannt';   // Coolify setzt SOURCE_COMMIT beim Build
 const fmtParts = new Intl.DateTimeFormat('de-CH', { timeZone: TZ, hour12: false, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 function local(t) { const p = {}; fmtParts.formatToParts(new Date(t * 1000)).forEach(x => p[x.type] = x.value); return p; }
 const minuteOfDay = t => { const p = local(t); return (+p.hour % 24) * 60 + +p.minute; };
@@ -298,7 +300,7 @@ http.createServer(async (req, res) => {
   const send = (code, type, b) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
   const json = (code, o) => send(code, 'application/json', JSON.stringify(o));
   const url = req.url.split('?')[0];
-  if (url === '/health') return json(client.connected ? 200 : 503, { mqtt: client.connected });
+  if (url === '/health') return json(client.connected ? 200 : 503, { mqtt: client.connected, version: VERSION, gestartet: stamp(START) });
   if (req.method === 'POST') {
     const b = await body(req), t = now();
     if (b === null) return json(400, { fehler: 'ungültiges JSON' });
@@ -313,7 +315,7 @@ http.createServer(async (req, res) => {
   }
   if (url === '/api/overview') {
     const t = now();
-    return json(200, { mqtt: client.connected, status: logic.payload(), sitzung_aktiv: logic.pending(t) !== null, stats,
+    return json(200, { mqtt: client.connected, version: VERSION, gestartet: stamp(START), status: logic.payload(), sitzung_aktiv: logic.pending(t) !== null, stats,
       sensoren: Object.keys(rx).map(k => Object.assign({ key: k, name: NAME[k], batterie: battery[k] || null }, rx[k])),
       grenze_mv: LOW_VOLTAGE_MV, empfang: rxLog, sitzungen: sessions, neueste: sessions[0] ? sessions[0].id : null, zeit: stamp(t) });
   }

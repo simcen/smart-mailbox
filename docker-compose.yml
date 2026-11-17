@@ -11,6 +11,7 @@ services:
       TOPIC_PARCEL: ${TOPIC_PARCEL:-zigbee2mqtt/briefkasten_paketfach}
       TOPIC_LETTER: ${TOPIC_LETTER:-zigbee2mqtt/briefkasten_brieffach}
       WINDOWS: ${WINDOWS:-05:00-07:00,11:30-14:30}
+      SOURCE_COMMIT: ${SOURCE_COMMIT:-}
       TZ: Europe/Zurich
     volumes:
       - smart-mailbox-data:/data

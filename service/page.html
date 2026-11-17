@@ -84,7 +84,7 @@ async function load() {
   if (document.activeElement && document.activeElement.tagName === 'SELECT') return;   // offene Auswahl nicht wegrendern
   const d = await (await fetch('/api/overview')).json();
   $('#conn').className = 'pill ' + (d.mqtt ? 'ok' : 'bad'); $('#conn').textContent = d.mqtt ? 'MQTT verbunden' : 'MQTT nicht verbunden';
-  $('#clock').textContent = 'Stand ' + d.zeit + (d.sitzung_aktiv ? ' · Sitzung läuft …' : '');
+  $('#clock').textContent = 'Stand ' + d.zeit + ' · Version ' + d.version + ', gestartet ' + d.gestartet + (d.sitzung_aktiv ? ' · Sitzung läuft …' : '');
   const p = d.status;
   $('#tiles').innerHTML =
     '<div class="tile ' + (p.brieffach_einwuerfe ? 'full' : '') + '"><i>Brieffach</i><b>' + (p.brieffach_einwuerfe ? 'Post (' + p.brieffach_einwuerfe + ')' : 'Leer') + '</b>' + (p.brieffach_unsicher ? '<span class="pill warn">vermutet</span>' : '') + '</div>' +
