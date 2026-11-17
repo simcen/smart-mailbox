@@ -19,6 +19,7 @@ const TOPICS = { slot: env.TOPIC_SLOT, parcel: env.TOPIC_PARCEL, letter: env.TOP
 const TOPIC_PRESENCE = env.TOPIC_PRESENCE || '';
 const CONTACT_FIELD = env.CONTACT_FIELD || 'contact';
 const HISTORY = 12;
+const LOW_VOLTAGE_MV = num('LOW_VOLTAGE_MV', 2850);   // darunter gilt die Batterie als schwach
 
 if (!TOPICS.slot || !TOPICS.parcel) { console.error('TOPIC_SLOT und TOPIC_PARCEL müssen gesetzt sein.'); process.exit(1); }
 fs.mkdirSync(DATA, { recursive: true });
@@ -50,7 +51,13 @@ let sessions = [];                 // letzte Sitzungen (neueste zuerst)
 let curEvents = [];                // Rohereignisse der laufenden Sitzung
 let presence = false;
 const sensorOpen = { slot: null, parcel: null, letter: null };
-const stats = { stimmt: 0, falsch: 0 };
+const stats = { stimmt: 0, falsch: 0, offen: 0 };
+function recount() {
+  stats.stimmt = sessions.filter(s => s.feedback && s.feedback.stimmt).length;
+  stats.falsch = sessions.filter(s => s.feedback && !s.feedback.stimmt).length;
+  stats.offen = sessions.filter(s => !s.feedback).length;
+}
+const battery = {};               // pro Sensor: { mv, prozent, temperatur, zeit }
 // Empfangsdiagnose: jede Meldung auf den Sensor-Topics, auch die ignorierten
 const rx = {};
 Object.keys(TOPICS).forEach(k => { if (TOPICS[k]) rx[k] = { topic: TOPICS[k], meldungen: 0, ereignisse: 0, ignoriert: 0, zuletzt: null, zustand: 'unbekannt', ergebnis: 'noch nichts empfangen' }; });
@@ -65,22 +72,25 @@ function received(sensor, t, buf, ergebnis, isEvent) {
   publishRx();
 }
 
-try { const s = JSON.parse(fs.readFileSync(F.state, 'utf8')); logic.state.brief = s.brief; logic.state.paket = s.paket; logic.state.last = s.last; } catch (e) { /* erster Start */ }
+try { const s = JSON.parse(fs.readFileSync(F.state, 'utf8')); logic.state.brief = s.brief; logic.state.paket = s.paket; logic.state.last = s.last; Object.assign(battery, s.battery || {}); } catch (e) { /* erster Start */ }
 (function loadSessions() {
   const byId = new Map();
   for (const l of readLines(F.sessions)) {
-    if (l.typ === 'feedback') { const s = byId.get(l.id); if (s) s.feedback = l.feedback; if (l.feedback.stimmt) stats.stimmt++; else stats.falsch++; }
+    if (l.typ === 'feedback') { const s = byId.get(l.id); if (s) s.feedback = l.feedback; }
     else byId.set(l.id, l);
   }
-  sessions = [...byId.values()].reverse().slice(0, 200);
+  sessions = [...byId.values()].reverse().slice(0, 500);
+  recount();
 })();
 
 const ctx = t => ({ resident: presence, minuteOfDay: minuteOfDay(t) });
 const NAME = { slot: 'Schlitz', parcel: 'Paketfach', letter: 'Türchen' };
 
+const saveState = () => fs.writeFile(F.state, JSON.stringify({ brief: logic.state.brief, paket: logic.state.paket, last: logic.state.last, battery }), () => {});
+
 function onResult(results, state, final, diag) {
   const t = now();
-  fs.writeFile(F.state, JSON.stringify({ brief: state.brief, paket: state.paket, last: state.last }), () => {});
+  saveState();
   results.forEach(r => console.log(stamp(t), r.code, '[' + r.konfidenz + ']', r.text));
   if (final && diag) {
     const t0 = diag.start;
@@ -96,8 +106,9 @@ function onResult(results, state, final, diag) {
       feedback: null
     };
     curEvents = [];
-    sessions.unshift(s); sessions = sessions.slice(0, 200);
+    sessions.unshift(s); sessions = sessions.slice(0, 500);
     append(F.sessions, s);
+    recount();
   }
   publishAll();
 }
@@ -132,6 +143,7 @@ client.on('connect', () => {
   publishDiscovery();
   publishAll();
   publishRx();
+  publishBattery();
 });
 client.on('error', e => console.error('MQTT-Fehler:', e.message));
 
@@ -141,6 +153,15 @@ client.on('message', (topic, buf) => {
   if (topic === TOPIC_PRESENCE) { const o = parseOpen(buf); if (o !== null) presence = o; return; }
   const sensor = Object.keys(TOPICS).find(k => TOPICS[k] === topic);
   if (!sensor) return;
+  try {
+    const j = JSON.parse(buf.toString());
+    if (j && typeof j === 'object' && (j.voltage !== undefined || j.battery !== undefined)) {
+      const b = battery[sensor] || {};
+      const changed = b.mv !== j.voltage || b.prozent !== j.battery;
+      battery[sensor] = { mv: j.voltage ?? null, prozent: j.battery ?? null, temperatur: j.device_temperature ?? null, zeit: stamp(t) };
+      if (changed) { saveState(); publishBattery(); }
+    }
+  } catch (e) { /* kein JSON */ }
   const open = parseOpen(buf);
   if (open === null) return received(sensor, t, buf, 'ignoriert: Zustand nicht lesbar (Feld «' + CONTACT_FIELD + '» fehlt?)', false);
   if (sensorOpen[sensor] === open) return received(sensor, t, buf, 'ignoriert: Zustand unverändert (' + (open ? 'offen' : 'zu') + ')', false);
@@ -156,23 +177,33 @@ client.on('message', (topic, buf) => {
 
 function command(cmd, payload, t) {
   if (['brief_leer', 'paket_leer', 'alles_leer'].includes(cmd)) return logic.manual(cmd, t);
-  const last = sessions[0];
-  if (cmd === 'stimmt') {
-    if (!last || last.feedback) return;
-    last.feedback = { stimmt: true, zeit: stamp(t) }; stats.stimmt++;
-    append(F.sessions, { typ: 'feedback', id: last.id, feedback: last.feedback });
-    return publishAll();
-  }
+  const target = sessions.find(s => !s.feedback);            // MQTT-Knöpfe bewerten die neueste unbewertete Sitzung
+  if (cmd === 'stimmt') { if (target) rate(target.id, { stimmt: true }, t); return; }
   if (cmd === 'real') {                                               // payload "1,0" = Post ja, Paket nein
     const [m, p] = payload.split(',').map(x => x.trim() === '1');
-    if (last && !last.feedback) {
-      const ok = (last.nachher.brief > 0) === m && (last.nachher.paket > 0) === p;
-      last.feedback = { stimmt: ok, real: { post: m, paket: p }, zeit: stamp(t) };
-      if (ok) stats.stimmt++; else stats.falsch++;
-      append(F.sessions, { typ: 'feedback', id: last.id, feedback: last.feedback });
-    }
+    if (target && target === sessions[0]) return rate(target.id, { real: { post: m, paket: p } }, t);
     return logic.setReal(m, p, t);
   }
+}
+
+/**
+ * Sitzung bewerten. fb = {stimmt:true} | {stimmt:false} | {real:{post,paket}} | null (Bewertung löschen).
+ * «real» beschreibt den Inhalt direkt nach dieser Sitzung; daraus ergibt sich stimmt/falsch.
+ * Nur bei der neuesten Sitzung wird mit «real» auch der aktuelle Status korrigiert.
+ */
+function rate(id, fb, t) {
+  const s = sessions.find(x => x.id === id);
+  if (!s) return false;
+  if (fb === null) s.feedback = null;
+  else if (fb.real) {
+    const ok = (s.nachher.brief > 0) === !!fb.real.post && (s.nachher.paket > 0) === !!fb.real.paket;
+    s.feedback = { stimmt: ok, real: { post: !!fb.real.post, paket: !!fb.real.paket }, zeit: stamp(t) };
+    if (!ok && s === sessions[0]) { recount(); append(F.sessions, { typ: 'feedback', id, feedback: s.feedback }); logic.setReal(!!fb.real.post, !!fb.real.paket, t); return true; }
+  } else { s.feedback = { stimmt: !!fb.stimmt, zeit: stamp(t) }; if (fb.aktion) s.feedback.aktion = String(fb.aktion).slice(0, 40); }
+  append(F.sessions, { typ: 'feedback', id, feedback: s.feedback });
+  recount();
+  publishAll();
+  return true;
 }
 
 function publishAll() {
@@ -181,7 +212,7 @@ function publishAll() {
   pub(BASE + '/status', Object.assign(p, {
     sitzung_aktiv: pend !== null, sensoren: cfg.letterDoor ? 3 : 2,
     zustellfenster: logic.inWindow(minuteOfDay(t)),
-    feedback_stimmt: stats.stimmt, feedback_falsch: stats.falsch,
+    feedback_stimmt: stats.stimmt, feedback_falsch: stats.falsch, feedback_offen: stats.offen,
     aktualisiert: stamp(t)
   }));
   const last = sessions[0];
@@ -197,6 +228,18 @@ function publishAll() {
     begruendung: s.ergebnisse.map(r => r.text).join(' '),
     feedback: s.feedback ? (s.feedback.stimmt ? 'stimmt' : 'falsch') : 'offen'
   })) });
+}
+
+function publishBattery() {
+  if (!client.connected) return;
+  const o = { schwach: false, schwach_liste: [], grenze_mv: LOW_VOLTAGE_MV };
+  Object.keys(rx).forEach(k => {
+    const b = battery[k] || {};
+    o[k + '_mv'] = b.mv ?? null; o[k + '_prozent'] = b.prozent ?? null; o[k + '_zeit'] = b.zeit ?? null;
+    if (typeof b.mv === 'number' && b.mv < LOW_VOLTAGE_MV) { o.schwach = true; o.schwach_liste.push(NAME[k]); }
+  });
+  o.schwach_text = o.schwach_liste.join(', ');
+  pub(BASE + '/batterie', o);
 }
 
 function publishRx() {
@@ -226,6 +269,12 @@ function publishDiscovery() {
   ent('sensor', 'feedback_falsch', { name: 'Rückmeldungen falsch', state_topic: st, value_template: tpl('feedback_falsch'), icon: 'mdi:close' });
   ent('sensor', 'letzte_sitzung', { name: 'Letzte Sitzung', state_topic: BASE + '/sitzung', value_template: tpl('code'), json_attributes_topic: BASE + '/sitzung', icon: 'mdi:magnify' });
   ent('sensor', 'verlauf', { name: 'Verlauf', state_topic: BASE + '/verlauf', value_template: tpl('anzahl'), json_attributes_topic: BASE + '/verlauf', icon: 'mdi:history' });
+  ent('sensor', 'feedback_offen', { name: 'Sitzungen unbewertet', state_topic: st, value_template: tpl('feedback_offen'), icon: 'mdi:help' });
+  Object.keys(rx).forEach(k => ent('sensor', 'spannung_' + { slot: 'schlitz', parcel: 'paketfach', letter: 'tuerchen' }[k], {
+    name: 'Batteriespannung ' + NAME[k], state_topic: BASE + '/batterie', value_template: '{{ value_json.' + k + '_mv }}',
+    device_class: 'voltage', unit_of_measurement: 'mV', state_class: 'measurement', entity_category: 'diagnostic' }));
+  ent('binary_sensor', 'batterie_schwach', { name: 'Batterie schwach', state_topic: BASE + '/batterie', value_template: bin('schwach'),
+    json_attributes_topic: BASE + '/batterie', device_class: 'battery', entity_category: 'diagnostic' });
   ent('sensor', 'empfang', { name: 'MQTT-Empfang', state_topic: BASE + '/empfang', value_template: tpl('meldungen'), json_attributes_topic: BASE + '/empfang', icon: 'mdi:access-point' });
   const btn = (id, name, cmd, payload, icon) => ent('button', id, { name, command_topic: BASE + '/cmd/' + cmd, payload_press: payload, icon });
   btn('stimmt', 'Letzte Erkennung stimmt', 'stimmt', '1', 'mdi:check-bold');
@@ -242,33 +291,37 @@ setInterval(() => {
 }, 500);
 setInterval(publishAll, 60000); // Zustellfenster / Lebenszeichen
 
-// ---------- HTTP: Health + Diagnose ----------
-const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-http.createServer((req, res) => {
-  const send = (code, type, body) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8' }); res.end(body); };
-  if (req.url === '/health') return send(client.connected ? 200 : 503, 'application/json', JSON.stringify({ mqtt: client.connected }));
-  if (req.url === '/api/sessions') return send(200, 'application/json', JSON.stringify(sessions));
-  if (req.url === '/api/empfang') return send(200, 'application/json', JSON.stringify({ sensoren: rx, letzte: rxLog }));
-  if (req.url === '/api/status') return send(200, 'application/json', JSON.stringify(logic.payload()));
-  if (req.url === '/api/events') return send(200, 'application/x-ndjson', fs.existsSync(F.events) ? fs.readFileSync(F.events) : '');
-  if (req.url === '/') {
-    const p = logic.payload();
-    return send(200, 'text/html', '<!DOCTYPE html><meta charset="utf-8"><title>Briefkasten-Diagnose</title>' +
-      '<style>body{font:14px system-ui;margin:20px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left;vertical-align:top}</style>' +
-      '<h1>Briefkasten-Diagnose</h1><p>Brieffach: <b>' + p.brieffach + '</b> (' + p.brieffach_einwuerfe + ') · Paketfach: <b>' + p.paketfach + '</b> (' + p.paketfach_anzahl +
-      ') · Rückmeldungen: ' + stats.stimmt + ' stimmt, ' + stats.falsch + ' falsch · <a href="/api/events">Rohereignisse</a> · <a href="/api/sessions">Sitzungen (JSON)</a></p>' +
-      '<h2>MQTT-Empfang</h2><p>Broker: ' + (client.connected ? 'verbunden' : '<b>nicht verbunden</b>') + '</p>' +
-      '<table><tr><th>Sensor</th><th>Topic</th><th>Meldungen</th><th>davon Ereignisse</th><th>ignoriert</th><th>Zustand</th><th>Zuletzt</th><th>Letztes Ergebnis</th></tr>' +
-      Object.keys(rx).map(k => '<tr><td>' + NAME[k] + '</td><td>' + esc(rx[k].topic) + '</td><td>' + rx[k].meldungen + '</td><td>' + rx[k].ereignisse + '</td><td>' + rx[k].ignoriert +
-        '</td><td>' + rx[k].zustand + '</td><td>' + (rx[k].zuletzt || '–') + '</td><td>' + esc(rx[k].ergebnis) + '</td></tr>').join('') + '</table>' +
-      '<h3>Letzte Rohmeldungen</h3><table><tr><th>Zeit</th><th>Sensor</th><th>Ergebnis</th><th>Payload</th></tr>' +
-      rxLog.map(m => '<tr><td>' + m.zeit + '</td><td>' + m.sensor + '</td><td>' + esc(m.ergebnis) + '</td><td><code>' + esc(m.payload) + '</code></td></tr>').join('') + '</table>' +
-      '<h2>Sitzungen</h2>' +
-      '<table><tr><th>Zeit</th><th>Ablauf</th><th>Erkannt</th><th>Vorher → Nachher (Post/Paket)</th><th>Begründung</th><th>Rückmeldung</th></tr>' +
-      sessions.slice(0, 100).map(s => '<tr><td>' + s.zeit + '</td><td>' + esc(s.ablauf) + '</td><td>' + s.code + ' [' + s.konfidenz + ']</td><td>' +
-        s.vorher.brief + '/' + s.vorher.paket + ' → ' + s.nachher.brief + '/' + s.nachher.paket + '</td><td>' + esc(s.ergebnisse.map(r => r.text).join(' ')) +
-        '</td><td>' + (s.feedback ? (s.feedback.stimmt ? 'stimmt' : 'falsch') : '–') + '</td></tr>').join('') + '</table>');
+// ---------- HTTP: Health + Diagnose + Bewertung ----------
+const PAGE = fs.readFileSync(path.join(__dirname, 'page.html'), 'utf8');
+function body(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e5) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch (e) { r(null); } }); }); }
+http.createServer(async (req, res) => {
+  const send = (code, type, b) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
+  const json = (code, o) => send(code, 'application/json', JSON.stringify(o));
+  const url = req.url.split('?')[0];
+  if (url === '/health') return json(client.connected ? 200 : 503, { mqtt: client.connected });
+  if (req.method === 'POST') {
+    const b = await body(req), t = now();
+    if (b === null) return json(400, { fehler: 'ungültiges JSON' });
+    if (url === '/api/feedback') {                       // {id, stimmt:true} | {id, stimmt:false, aktion:'peek_schlitz'} | {id, loeschen:true}
+      const fb = b.loeschen ? null : b.real ? { real: b.real } : { stimmt: !!b.stimmt, aktion: b.aktion };
+      return rate(b.id, fb, t) ? json(200, { ok: true }) : json(404, { fehler: 'Sitzung nicht gefunden' });
+    }
+    if (url === '/api/status') {                         // {post:bool, paket:bool} – aktuellen Status korrigieren
+      logic.setReal(!!b.post, !!b.paket, t); return json(200, { ok: true });
+    }
+    return json(404, { fehler: 'unbekannt' });
   }
+  if (url === '/api/overview') {
+    const t = now();
+    return json(200, { mqtt: client.connected, status: logic.payload(), sitzung_aktiv: logic.pending(t) !== null, stats,
+      sensoren: Object.keys(rx).map(k => Object.assign({ key: k, name: NAME[k], batterie: battery[k] || null }, rx[k])),
+      grenze_mv: LOW_VOLTAGE_MV, empfang: rxLog, sitzungen: sessions, neueste: sessions[0] ? sessions[0].id : null, zeit: stamp(t) });
+  }
+  if (url === '/api/sessions') return json(200, sessions);
+  if (url === '/api/empfang') return json(200, { sensoren: rx, letzte: rxLog });
+  if (url === '/api/status') return json(200, logic.payload());
+  if (url === '/api/events') return send(200, 'application/x-ndjson', fs.existsSync(F.events) ? fs.readFileSync(F.events) : '');
+  if (url === '/') return send(200, 'text/html', PAGE);
   send(404, 'text/plain', 'not found');
 }).listen(num('PORT', 3000), () => console.log('HTTP auf Port', num('PORT', 3000)));
 
