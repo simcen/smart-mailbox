@@ -274,7 +274,7 @@ function publishDiscovery() {
   Object.keys(rx).forEach(k => ent('sensor', 'spannung_' + { slot: 'schlitz', parcel: 'paketfach', letter: 'tuerchen' }[k], {
     name: 'Batteriespannung ' + NAME[k], state_topic: BASE + '/batterie', value_template: '{{ value_json.' + k + '_mv }}',
     device_class: 'voltage', unit_of_measurement: 'mV', state_class: 'measurement', entity_category: 'diagnostic' }));
-  ent('binary_sensor', 'batterie_schwach', { name: 'Batterie schwach', state_topic: BASE + '/batterie', value_template: bin('schwach'),
+  ent('binary_sensor', 'batterie_schwach', { name: 'Sensor-Batterien', state_topic: BASE + '/batterie', value_template: bin('schwach'),
     json_attributes_topic: BASE + '/batterie', device_class: 'battery', entity_category: 'diagnostic' });
   ent('sensor', 'empfang', { name: 'MQTT-Empfang', state_topic: BASE + '/empfang', value_template: tpl('meldungen'), json_attributes_topic: BASE + '/empfang', icon: 'mdi:access-point' });
   const btn = (id, name, cmd, payload, icon) => ent('button', id, { name, command_topic: BASE + '/cmd/' + cmd, payload_press: payload, icon });
