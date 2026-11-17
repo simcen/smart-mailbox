@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Briefkasten-Diagnose</title>
+<style>
+  :root { --bg:#f3f4f2; --card:#fff; --ink:#1d2327; --mute:#6a747b; --line:#dfe3e1; --ok:#2f7d4f; --warn:#b7791f; --bad:#b83a32; --acc:#1f5f8b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:12px 18px; background:var(--card); border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; } h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 10px; }
+  main { max-width:1200px; margin:auto; padding:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; overflow-x:auto; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:99px; background:#eef1f0; font-size:12px; }
+  .pill.ok { background:#e2f2e8; color:var(--ok); } .pill.bad { background:#fbe4e2; color:var(--bad); } .pill.warn { background:#fdf3dc; color:var(--warn); }
+  .tiles { display:flex; gap:10px; flex-wrap:wrap; }
+  .tile { border:1px solid var(--line); border-left:5px solid var(--mute); border-radius:8px; padding:8px 12px; min-width:150px; }
+  .tile.full { border-left-color:var(--ok); } .tile b { display:block; font-size:18px; } .tile i { font-style:normal; font-size:12px; color:var(--mute); }
+  table { border-collapse:collapse; width:100%; } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--mute); font-weight:600; } code { font-size:12px; word-break:break-all; }
+  button, select { font:inherit; cursor:pointer; border:1px solid var(--line); background:#fafbfa; border-radius:6px; padding:4px 9px; color:var(--ink); }
+  button:hover { border-color:var(--acc); } button.yes { border-color:var(--ok); color:var(--ok); }
+  .sess { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+  .sess .top { display:flex; gap:10px; flex-wrap:wrap; align-items:baseline; } .sess .why { color:var(--mute); margin:4px 0 8px; }
+  .sess .act { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .mute { color:var(--mute); } label { display:inline-flex; gap:6px; align-items:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Briefkasten-Diagnose</h1>
+  <span id="conn" class="pill">…</span><span id="clock" class="mute"></span>
+  <span class="mute">· <a href="/api/events">Rohereignisse</a> · <a href="/api/sessions">Sitzungen (JSON)</a></span>
+</header>
+<main>
+  <div class="card">
+    <h2>Status (was die Logik glaubt)</h2>
+    <div class="tiles" id="tiles"></div>
+    <p style="margin:12px 0 0">Status korrigieren, real liegt drin:
+      <button data-set="0,0">nichts</button> <button data-set="1,0">nur Post</button>
+      <button data-set="0,1">nur Paket</button> <button data-set="1,1">Post und Paket</button>
+      <span class="mute">– ändert nur die Anzeige, bewertet keine Sitzung.</span></p>
+  </div>
+  <div class="card">
+    <h2>Unbewertete Sitzungen <span id="nOpen" class="pill"></span></h2>
+    <p class="mute" style="margin-top:0">«Stimmt», wenn die Erkennung richtig war. Sonst auswählen, was wirklich passiert ist. Die Bewertung ändert den Status nicht.</p>
+    <div id="open"></div>
+  </div>
+  <div class="card">
+    <h2>Bewertete Sitzungen <span id="nRated" class="pill"></span></h2>
+    <table id="rated"></table>
+  </div>
+  <div class="card">
+    <h2>Sensoren</h2>
+    <table id="sensors"></table>
+  </div>
+  <div class="card">
+    <h2>Letzte MQTT-Meldungen (auch ignorierte)</h2>
+    <table id="rx"></table>
+  </div>
+</main>
+<script>
+const AKTIONEN = [
+  ['einwurf', 'Post eingeworfen'], ['paket', 'Paket eingelegt'], ['einwurf+paket', 'Post und Paket'],
+  ['peek_schlitz', 'Durch Schlitz gelugt'], ['peek_paket', 'Ins Paketfach gelugt'],
+  ['paket_entnommen', 'Nur Paket entnommen'], ['leerung', 'Alles geleert'], ['nichts', 'Nichts / Klappern / Test'], ['anderes', 'Anderes']
+];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const post = (url, o) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o) }).then(load);
+let busy = false;
+
+function sessHtml(s) {
+  return '<div class="sess"><div class="top"><b>' + esc(s.zeit) + '</b><span class="pill ' + (s.konfidenz === 'vermutet' ? 'warn' : 'ok') + '">' + esc(s.code) + ' · ' + s.konfidenz +
+    '</span><span>Post/Paket ' + s.vorher.brief + '/' + s.vorher.paket + ' → ' + s.nachher.brief + '/' + s.nachher.paket + '</span><span class="mute">' +
+    (s.zustellfenster ? 'im Zustellfenster' : 'ausserhalb Zustellfenster') + '</span></div>' +
+    '<div>' + esc(s.ablauf) + '</div><div class="why">' + esc(s.ergebnisse.map(r => r.text).join(' ')) + '</div>' +
+    '<div class="act"><button class="yes" data-ok="' + esc(s.id) + '">✓ Stimmt</button><label>Falsch, real war: <select data-id="' + esc(s.id) + '"><option value="">– wählen –</option>' +
+    AKTIONEN.map(a => '<option value="' + a[0] + '">' + a[1] + '</option>').join('') + '</select></label></div></div>';
+}
+
+async function load() {
+  if (document.activeElement && document.activeElement.tagName === 'SELECT') return;   // offene Auswahl nicht wegrendern
+  const d = await (await fetch('/api/overview')).json();
+  $('#conn').className = 'pill ' + (d.mqtt ? 'ok' : 'bad'); $('#conn').textContent = d.mqtt ? 'MQTT verbunden' : 'MQTT nicht verbunden';
+  $('#clock').textContent = 'Stand ' + d.zeit + (d.sitzung_aktiv ? ' · Sitzung läuft …' : '');
+  const p = d.status;
+  $('#tiles').innerHTML =
+    '<div class="tile ' + (p.brieffach_einwuerfe ? 'full' : '') + '"><i>Brieffach</i><b>' + (p.brieffach_einwuerfe ? 'Post (' + p.brieffach_einwuerfe + ')' : 'Leer') + '</b>' + (p.brieffach_unsicher ? '<span class="pill warn">vermutet</span>' : '') + '</div>' +
+    '<div class="tile ' + (p.paketfach_anzahl ? 'full' : '') + '"><i>Paketfach</i><b>' + (p.paketfach_anzahl ? 'Paket (' + p.paketfach_anzahl + ')' : 'Leer') + '</b>' + (p.paketfach_unsicher ? '<span class="pill warn">vermutet</span>' : '') + '</div>' +
+    '<div class="tile"><i>Bewertungen</i><b>' + d.stats.stimmt + ' ✓ · ' + d.stats.falsch + ' ✗</b>' + d.stats.offen + ' offen</div>' +
+    (p.alarm_schlitz_blockiert ? '<div class="tile"><span class="pill bad">Schlitz blockiert</span></div>' : '') +
+    (p.alarm_paketfach_offen ? '<div class="tile"><span class="pill bad">Paketfach steht offen</span></div>' : '');
+  const open = d.sitzungen.filter(s => !s.feedback), rated = d.sitzungen.filter(s => s.feedback);
+  $('#nOpen').textContent = open.length; $('#nRated').textContent = rated.length;
+  $('#open').innerHTML = open.length ? open.map(sessHtml).join('') : '<p class="mute">Alles bewertet.</p>';
+  const aName = Object.fromEntries(AKTIONEN);
+  $('#rated').innerHTML = '<tr><th>Zeit</th><th>Ablauf</th><th>Erkannt</th><th>Post/Paket</th><th>Bewertung</th><th></th></tr>' + rated.map(s =>
+    '<tr><td>' + esc(s.zeit) + '</td><td>' + esc(s.ablauf) + '</td><td>' + esc(s.code) + ' (' + s.konfidenz + ')</td><td>' + s.vorher.brief + '/' + s.vorher.paket + ' → ' + s.nachher.brief + '/' + s.nachher.paket +
+    '</td><td>' + (s.feedback.stimmt ? '<span class="pill ok">stimmt</span>' : '<span class="pill bad">falsch</span> ' + esc(aName[s.feedback.aktion] || (s.feedback.real ? 'real: ' + (s.feedback.real.post ? 'Post' : 'keine Post') + ', ' + (s.feedback.real.paket ? 'Paket' : 'kein Paket') : ''))) +
+    '</td><td><button data-undo="' + esc(s.id) + '">zurücknehmen</button></td></tr>').join('');
+  $('#sensors').innerHTML = '<tr><th>Sensor</th><th>Topic</th><th>Zustand</th><th>Meldungen</th><th>Ereignisse</th><th>Ignoriert</th><th>Zuletzt</th><th>Batterie</th><th>Letztes Ergebnis</th></tr>' + d.sensoren.map(x => {
+    const b = x.batterie, low = b && typeof b.mv === 'number' && b.mv < d.grenze_mv;
+    return '<tr><td>' + x.name + '</td><td><code>' + esc(x.topic) + '</code></td><td>' + x.zustand + '</td><td>' + x.meldungen + '</td><td>' + x.ereignisse + '</td><td>' + x.ignoriert + '</td><td>' + esc(x.zuletzt || '–') +
+      '</td><td>' + (b ? '<span class="pill ' + (low ? 'bad' : 'ok') + '">' + (b.mv ?? '?') + ' mV' + (b.prozent != null ? ' · ' + b.prozent + ' %' : '') + '</span>' + (b.temperatur != null ? ' ' + b.temperatur + ' °C' : '') + '<br><span class="mute">' + esc(b.zeit) + '</span>' : '–') +
+      '</td><td>' + esc(x.ergebnis) + '</td></tr>'; }).join('');
+  $('#rx').innerHTML = '<tr><th>Zeit</th><th>Sensor</th><th>Ergebnis</th><th>Payload</th></tr>' + d.empfang.map(m =>
+    '<tr><td>' + esc(m.zeit) + '</td><td>' + m.sensor + '</td><td>' + esc(m.ergebnis) + '</td><td><code>' + esc(m.payload) + '</code></td></tr>').join('');
+}
+
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.dataset.ok) post('/api/feedback', { id: t.dataset.ok, stimmt: true });
+  if (t.dataset.undo) post('/api/feedback', { id: t.dataset.undo, loeschen: true });
+  if (t.dataset.set) { const [m, p] = t.dataset.set.split(','); post('/api/status', { post: m === '1', paket: p === '1' }); }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.id && t.value) { const v = t.value; t.blur(); post('/api/feedback', { id: t.dataset.id, stimmt: false, aktion: v }); }
+});
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>

@@ -21,6 +21,7 @@ Der Dienst abonniert die Sensor-Topics und veröffentlicht (alle retained):
 - `briefkasten/sitzung` – letzte Sitzung: Ablauf der Rohereignisse, erkannter Fall, Begründung, vorher/nachher
 - `briefkasten/verlauf` – die letzten 12 Sitzungen
 - `briefkasten/empfang` – Empfangsdiagnose: jede Meldung auf den Sensor-Topics, auch die ignorierten
+- `briefkasten/batterie` – Batteriespannung pro Sensor (aus `voltage`), «schwach» unter `LOW_VOLTAGE_MV` (Standard 2850 mV)
 - `briefkasten/online` – `online` / `offline`
 
 Befehle (`briefkasten/cmd/...`), im Dashboard als Knöpfe:
@@ -29,8 +30,13 @@ Befehle (`briefkasten/cmd/...`), im Dashboard als Knöpfe:
 - `real` mit `1,0` (Post ja, Paket nein) usw. – realen Inhalt melden: korrigiert den Status und markiert die letzte Sitzung als richtig oder falsch
 - `brief_leer`, `paket_leer`, `alles_leer` – Status zurücksetzen
 
-Im Volume `/data` liegen `events.jsonl` (alle Rohereignisse), `sessions.jsonl` (Sitzungen samt Rückmeldung) und `state.json` (Status über Neustarts).
-Ohne Home Assistant zeigt `http://<host>:3180/` dieselbe Diagnose als Tabelle; `/health` ist der Healthcheck.
+Im Volume `/data` liegen `events.jsonl` (alle Rohereignisse), `sessions.jsonl` (Sitzungen samt Bewertung) und `state.json` (Status über Neustarts).
+
+### Diagnose-Seite
+
+`http://<host>:3180/` zeigt Status, Sensoren (Empfang, Batterie) und alle Sitzungen. Dort lässt sich **jede** Sitzung bewerten, nicht nur die letzte:
+«Stimmt» oder «Falsch, real war: …» mit der Aktion, die wirklich passiert ist. Die Bewertung ändert den Status nicht; dafür gibt es «Status korrigieren».
+Die Seite hat keine Anmeldung und gehört nur ins LAN. `/health` ist der Healthcheck.
 
 ## Coolify
 
