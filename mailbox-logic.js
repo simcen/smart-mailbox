@@ -27,6 +27,7 @@
     quiet: 10,            // Ruhezeit nach letzter Bewegung, dann wird die Sitzung ausgewertet
     slotStuck: 20,        // Schlitz so lange offen = etwas steckt (Zeitung)
     parcelOpenAlarm: 60,  // Paketfach so lange offen = Alarm "nicht geschlossen"
+    letterOrphan: 30,     // Türchen «offen» bei geschlossenem Paketfach: nach so vielen Sekunden als zu annehmen
     windows: [[5 * 60, 7 * 60], [11 * 60 + 30, 14 * 60 + 30]] // Zustellfenster in Minuten (Frühzustellung, Post)
   };
 
@@ -64,6 +65,9 @@
         };
       }
       const s = this.session;
+      // Das Türchen kann nur bei offenem Paketfach offen sein: Geht das Paketfach zu, ist auch das Türchen zu –
+      // selbst wenn dessen Sensor das Schliessen nicht gemeldet hat.
+      if (sensor === 'parcel' && !isOpen && this.open.letter !== null) this._impliedLetterClose(t, 'Paketfach wurde geschlossen');
       s.last = t;
       if (ctx.resident) s.resident = true;
       if (isOpen) {
@@ -98,10 +102,21 @@
         this._emit([{ code: 'alarm_paketfach_offen', konfidenz: 'sicher',
           text: 'Paketfach steht offen (nicht richtig geschlossen?).' }], t, false);
       }
+      // Türchen «offen», Paketfach aber zu und Ruhe: Schliessen-Meldung fehlt (oder Öffnen des Paketfachs wurde verpasst)
+      if (this.open.letter !== null && this.open.parcel === null && t - s.last >= c.letterOrphan) {
+        this._impliedLetterClose(s.last, 'Paketfach ist zu und es bewegt sich nichts mehr');
+      }
       // Sitzung beenden, wenn alles zu und ruhig
       if (this.open.slot === null && this.open.parcel === null && this.open.letter === null && t - s.last >= c.quiet) {
         this._classify(t);
       }
+    }
+
+    _impliedLetterClose(t, grund) {
+      const s = this.session;
+      s.letter.push(Math.max(this.cfg.debounce, t - this.open.letter));
+      this.open.letter = null;
+      s.hinweis = 'Schliessen des Türchens wurde nicht gemeldet und abgeleitet (' + grund + ').';
     }
 
     /** Sekunden bis zur Auswertung, oder null */
@@ -131,7 +146,7 @@
       const s = this.session, c = this.cfg, st = this.state;
       this.session = null;
       const diag = { start: s.start, ende: t, dauer: { slot: s.slot, parcel: s.parcel, letter: s.letter },
-        bewohner: s.resident, zustellfenster: s.inWindow, vorher: { brief: st.brief.count, paket: st.paket.count } };
+        bewohner: s.resident, zustellfenster: s.inWindow, hinweis: s.hinweis || null, vorher: { brief: st.brief.count, paket: st.paket.count } };
       const S = s.slot.filter(d => d >= c.debounce);
       const P = s.parcel.filter(d => d >= c.debounce);
       const L = s.letter.filter(d => d >= c.debounce);
@@ -266,6 +281,7 @@
               (delivery ? ', zusammen mit Paketzustellung' : '') + ' – Post eingeworfen.' });
         }
       }
+      if (s.hinweis && res.length) res[res.length - 1].text += ' Hinweis: ' + s.hinweis;
       if (!res.length) res.push({ code: 'abschluss', konfidenz: 'sicher', text: 'Sitzung beendet, keine weitere Änderung.' });
       this._emit(res, t, true, diag);
     }

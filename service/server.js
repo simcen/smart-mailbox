@@ -96,8 +96,9 @@ function onResult(results, state, final, diag) {
     const t0 = diag.start;
     const s = {
       id: new Date(t0 * 1000).toISOString(), zeit: stamp(t0), sensoren: cfg.letterDoor ? 3 : 2,
-      ereignisse: curEvents.map(e => ({ t: +(e.t - t0).toFixed(2), sensor: e.sensor, offen: e.open })),
-      ablauf: curEvents.map(e => '+' + (e.t - t0).toFixed(1) + 's ' + NAME[e.sensor] + (e.open ? ' auf' : ' zu')).join(', '),
+      ereignisse: curEvents.map(e => ({ t: +(e.t - t0).toFixed(2), sensor: e.sensor, offen: e.open, abgeleitet: !!e.abgeleitet })),
+      hinweis: diag.hinweis,
+      ablauf: curEvents.map(e => '+' + (e.t - t0).toFixed(1) + 's ' + NAME[e.sensor] + (e.open ? ' auf' : ' zu') + (e.abgeleitet ? ' (abgeleitet)' : '')).join(', '),
       dauer: diag.dauer, zustellfenster: diag.zustellfenster, bewohner: diag.bewohner,
       vorher: diag.vorher, nachher: diag.nachher,
       ergebnisse: results, code: results.map(r => r.code).join('+'),
@@ -169,6 +170,19 @@ client.on('message', (topic, buf) => {
   const first = sensorOpen[sensor] === null;
   sensorOpen[sensor] = open;
   if (first && !open) return received(sensor, t, buf, 'ignoriert: Startzustand «zu»', false);
+  if (first && open && sensor === 'letter' && sensorOpen.parcel !== true)
+    return received(sensor, t, buf, 'ignoriert: Startzustand «offen» bei geschlossenem Paketfach – unplausibel, Sensor prüfen', false);
+  // Paketfach zu, Türchen laut Sensor noch offen: Schliessen des Türchens ableiten (Meldung fehlt)
+  if (sensor === 'parcel' && !open && sensorOpen.letter === true) {
+    sensorOpen.letter = false;
+    const e = 'abgeleitet: zu, weil Paketfach geschlossen wurde – Meldung des Türchens fehlt';
+    rx.letter.zustand = 'zu (abgeleitet)'; rx.letter.ergebnis = e; rx.letter.abgeleitet = (rx.letter.abgeleitet || 0) + 1;
+    rxLog.unshift({ zeit: stamp(t), sensor: NAME.letter, ergebnis: e, payload: '(keine Meldung)' });
+    if (logic.open.letter !== null) {            // nur wenn die Logik das Türchen in dieser Sitzung offen sah
+      store.addEvent({ t: +t.toFixed(3), zeit: stamp(t), sensor: 'letter', open: false });
+      curEvents.push({ t, sensor: 'letter', open: false, abgeleitet: true });
+    }
+  }
   received(sensor, t, buf, 'Ereignis: ' + (open ? 'auf' : 'zu'), true);
   store.addEvent({ t: +t.toFixed(3), zeit: stamp(t), sensor, open });
   curEvents.push({ t, sensor, open });

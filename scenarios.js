@@ -60,6 +60,8 @@
       steps: seq(o('slot', 0, 0.15), o('slot', 0.6, 0.2), o('slot', 1.4, 0.1)), truth: none },
     { group: 'Störung', name: 'Paketfach nicht geschlossen (75 s)', time: '12:15', resident: false, pre: [0, 0],
       steps: o('parcel', 0, 75), truth: parcel, hint: 'Zeitraffer empfohlen' },
+    { group: 'Störung', name: 'Türchen-Sensor meldet Schliessen nicht', time: '17:30', resident: false, pre: [2, 0],
+      steps: seq(o('parcel', 0, 14), [[4, 'letter', true]]), truth: empty, hint: 'Nur mit 3 Sensoren relevant' },
     { group: 'Störung', name: 'Flyer am Nachmittag', time: '15:30', resident: false, pre: [0, 0],
       steps: o('slot', 0, 1), truth: mail },
 

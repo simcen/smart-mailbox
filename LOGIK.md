@@ -10,10 +10,15 @@ Diese Datei beschreibt die Regeln, die in `mailbox-logic.js` umgesetzt und im Si
 | `slot` auf/zu | Sensor an der Briefschlitz-Klappe | ja |
 | `parcel` auf/zu | Sensor an der Paketfach-Klappe | ja |
 | `letter` auf/zu | Sensor am Brieffach-Türchen | optional, siehe unten |
-| Bewohner in der Nähe | Haustürkontakt, Präsenz, Heimkommen (Loxone/HA) | empfohlen |
+| Bewohner am Briefkasten | Haustür in den letzten Minuten geöffnet, Heimkommen-Ereignis – **nicht** der Zustand «zuhause» | optional |
 | Uhrzeit | Zustellfenster 05:00–07:00 (Frühzustellung Zeitung) und 11:30–14:30 (Pöstler) | ja |
 
-Das Präsenzsignal ist der grösste Hebel: Ein einzelner Kontakt am Paketfach kann «Paket rein» und «Paket raus» nicht unterscheiden. Ohne Präsenzsignal funktioniert die Logik, markiert aber mehr Ergebnisse als «vermutet».
+### Achtung beim Präsenzsignal
+
+Der Zustand «zuhause» aus Home Assistant darf **nicht** als Präsenzsignal verwendet werden. Im Homeoffice wäre er den ganzen Tag gesetzt: Jede Paketzustellung würde dann als Kontrolle oder Entnahme gewertet und längere Einwürfe als Reinlugen (Test: nur noch 16–18 von 27 Szenarien richtig).
+Brauchbar ist nur ein Ereignis, das «jemand geht gerade zum Briefkasten» bedeutet, z.B. Haustür in den letzten 2–3 Minuten vor oder nach der Sitzung geöffnet.
+
+Mit drei Sensoren kann das Präsenzsignal ganz weggelassen werden: Die Trefferquote bleibt bei 24 von 27, nur einzelne Ergebnisse sind dann «vermutet» statt «sicher». Mit zwei Sensoren sinkt sie ohne Präsenzsignal auf 19 von 27.
 
 ## Ausgänge (MQTT `briefkasten/status`, retained)
 
@@ -86,6 +91,14 @@ Was der dritte Sensor löst (Gruppe «Dritter Sensor» im Simulator):
 Was er nicht löst: Das Paketfach selbst bleibt mehrdeutig (Paket rein oder raus), wenn das Türchen zu bleibt und kein Präsenzsignal da ist. Auch die beiden Schlitz-Grenzfälle bleiben.
 
 `node test.js` vergleicht beide Varianten: 20 von 27 Szenarien richtig mit 2 Sensoren, 24 von 27 mit 3.
+
+### Wenn der Türchen-Sensor das Schliessen nicht meldet
+
+Das Türchen kann nur offen sein, solange das Paketfach offen ist. Daraus leitet die Logik fehlende Meldungen ab, statt auf sie zu warten:
+
+- Geht das Paketfach zu, während das Türchen laut Sensor noch offen ist, gilt das Türchen ab diesem Moment als zu. Die Sitzung wird normal ausgewertet und trägt den Hinweis «Schliessen des Türchens wurde nicht gemeldet und abgeleitet».
+- Meldet das Türchen «offen», obwohl das Paketfach zu ist (Öffnen des Paketfachs verpasst), gilt es nach 30 s Ruhe als zu (`letterOrphan`).
+- Meldet das Türchen direkt nach einem Neustart des Dienstes «offen» bei geschlossenem Paketfach, wird das als unplausibler Startzustand ignoriert.
 
 ## Abgedeckte Fälle
 
