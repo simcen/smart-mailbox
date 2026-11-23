@@ -4,12 +4,18 @@
  *
  *  - Meldungen eines Sensors, die höchstens BURST s auseinanderliegen, bilden ein «Aufwachen».
  *  - Intervall T = Median der Abstände zwischen Aufwachen im Bereich 30–90 Min. (Aqara: ca. 55 Min.).
- *  - Ein Aufwachen im Raster T (± Toleranz) nach dem letzten Lebenszeichen gilt als Lebenszeichen, sonst als Kontaktereignis.
- *  - Lücke = Abstand zwischen zwei Lebenszeichen > 1,25 × T.
+ *  - Der Sensor startet seinen Lebenszeichen-Takt nach jeder Übertragung neu (auch nach einem Kontaktereignis).
+ *    Jedes Aufwachen zählt deshalb als Lebenszeichen; erwartet wird das nächste T später.
+ *  - Lücke = Abstand zwischen zwei Aufwachen > 1,25 × T, fehlend = gerundet(Abstand / T) − 1.
+ *  - Schweigen ALLE Sensoren gleichzeitig länger als AUSFALL, liegt es nicht am Funk zum Briefkasten, sondern an der
+ *    Empfangskette (Dienst, Broker, Zigbee2MQTT, Coordinator). Solche Zeiten werden separat ausgewiesen und nicht als
+ *    Funkverlust gezählt.
+ *  - Ampel: rot bei Quote < 70 % oder zuletzt vor > 3 × T, orange bei Quote < 90 % oder zuletzt vor > 1,5 × T, sonst grün.
  */
 const BURST = 10;
 const TOL = 180;
 const DEFAULT_T = 3300;
+const AUSFALL = 4 * 3600;
 
 const median = a => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
 
@@ -29,31 +35,52 @@ function analyse(rows, { from, to, names = {}, hourOf, dayOf }) {
     }
     const gaps = wakes.slice(1).map((w, i) => w.t - wakes[i].t);
     const T = median(gaps.filter(g => g >= 1800 && g <= 5400)) || DEFAULT_T;
-    let lastHb = null;
-    for (const w of wakes) {
-      if (lastHb === null) { w.hb = true; lastHb = w.t; continue; }
-      const d = w.t - lastHb, k = Math.round(d / T);
-      w.hb = k >= 1 && Math.abs(d - k * T) <= TOL + 30 * (k - 1);
-      if (w.hb) lastHb = w.t;
-    }
-    const hbs = wakes.filter(w => w.hb);
+    // Darstellung: Kontaktereignis = Zustand anders als beim vorherigen Aufwachen oder ausserhalb des Takts
+    wakes.forEach((w, i) => {
+      if (!i) { w.hb = true; return; }
+      const d = w.t - wakes[i - 1].t, k = Math.round(d / T);
+      w.hb = w.p.contact === wakes[i - 1].p.contact && k >= 1 && Math.abs(d - k * T) <= TOL + 30 * (k - 1);
+    });
     const luecken = [];
-    for (let i = 1; i < hbs.length; i++) {
-      const d = hbs[i].t - hbs[i - 1].t;
-      if (d > 1.25 * T) luecken.push({ von: hbs[i - 1].t, bis: hbs[i].t, dauer: d, fehlend: Math.max(1, Math.round(d / T) - 1) });
+    const seq = wakes.map(w => w.t);
+    if (seq.length) seq.push(to);
+    for (let i = 1; i < seq.length; i++) {
+      const d = seq[i] - seq[i - 1];
+      if (d > 1.25 * T) luecken.push({ von: seq[i - 1], bis: i === seq.length - 1 ? null : seq[i], dauer: d, fehlend: Math.max(1, Math.round(d / T) - 1), offen: i === seq.length - 1 });
     }
+    if (luecken.length && luecken[luecken.length - 1].offen && luecken[luecken.length - 1].dauer <= 1.25 * T) luecken.pop();
+    return { key, ms, wakes, T, luecken };
+  });
+  if (!sensoren.length) return { von: from, bis: to, sensoren: [], ausfaelle: [], gleichzeitig: [] };
+
+  // Ausfälle der Empfangskette: Zeiten, in denen alle Sensoren gleichzeitig schweigen
+  let ausfaelle = [{ von: from, bis: to }];
+  for (const se of sensoren) {
+    const silent = [{ von: from, bis: se.wakes.length ? se.wakes[0].t : to }].concat(se.luecken.map(l => ({ von: l.von, bis: l.bis ?? to })));
+    const next = [];
+    for (const a of ausfaelle) for (const b of silent) { const v = Math.max(a.von, b.von), e = Math.min(a.bis, b.bis); if (e > v) next.push({ von: v, bis: e }); }
+    ausfaelle = next;
+  }
+  ausfaelle = ausfaelle.filter(a => a.bis - a.von >= AUSFALL && a.von > from).map(a => Object.assign(a, { dauer: a.bis - a.von }));
+  const imAusfall = (von, bis) => ausfaelle.reduce((s, a) => s + Math.max(0, Math.min(bis, a.bis) - Math.max(von, a.von)), 0);
+
+  const result = sensoren.map(({ key, ms, wakes, T, luecken }) => {
+    const hbs = wakes;
+    luecken.forEach(l => {
+      const aus = imAusfall(l.von, l.bis ?? to);
+      l.ausfall = aus;
+      l.fehlend = Math.max(0, Math.round((l.dauer - aus) / T) - 1);   // Funkverlust ohne Ausfallzeit
+    });
     const last = wakes.length ? wakes[wakes.length - 1].t : null;
-    // offene Lücke bis jetzt
-    const lastHbT = hbs.length ? hbs[hbs.length - 1].t : null;
-    if (lastHbT !== null && to - lastHbT > 1.25 * T) luecken.push({ von: lastHbT, bis: null, dauer: to - lastHbT, fehlend: Math.floor((to - lastHbT) / T), offen: true });
     const start = hbs.length ? hbs[0].t : from;
     const erwartet = Math.max(1, Math.floor((to - start) / T) + 1);
-    // pro Tag und pro Tageszeit
+    // pro Tag und pro Tageszeit (nur Funkverluste)
     const tage = {}, stunden = Array.from({ length: 24 }, () => ({ empfangen: 0, fehlend: 0 }));
     hbs.forEach(w => { const d = dayOf(w.t); (tage[d] = tage[d] || { empfangen: 0, fehlend: 0 }).empfangen++; stunden[hourOf(w.t)].empfangen++; });
     luecken.forEach(l => {
       const end = l.bis ?? to;
-      for (let t = l.von + T, k = 0; k < l.fehlend && t < end; t += T, k++) {
+      for (let t = l.von + T; t < end - T / 2; t += T) {
+        if (imAusfall(t - 1, t + 1)) continue;
         const d = dayOf(t); (tage[d] = tage[d] || { empfangen: 0, fehlend: 0 }).fehlend++; stunden[hourOf(t)].fehlend++;
       }
     });
@@ -61,12 +88,18 @@ function analyse(rows, { from, to, names = {}, hourOf, dayOf }) {
     const mv = ms.map(m => m.p.voltage).filter(x => typeof x === 'number');
     const fehlend = luecken.reduce((s, l) => s + l.fehlend, 0);
     const alter = last !== null ? to - last : null;
+    const quote = hbs.length / (hbs.length + fehlend || 1);
+    const gruende = [];
+    if (alter === null || alter > 3 * T) gruende.push('rot: seit über 3 Intervallen still');
+    else if (alter > 1.5 * T) gruende.push('orange: seit über 1,5 Intervallen still');
+    if (quote < 0.7) gruende.push('rot: weniger als 70 % angekommen');
+    else if (quote < 0.9) gruende.push('orange: weniger als 90 % angekommen');
+    const ampel = gruende.some(g => g.startsWith('rot')) ? 'bad' : gruende.length ? 'warn' : 'ok';
     return {
       key, name: names[key] || key.replace(/^ref:/, ''), referenz: key.startsWith('ref:'), topic: by[key].topic,
       intervall: T, meldungen: ms.length, lebenszeichen: hbs.length, erwartet, fehlend,
-      quote: hbs.length / (hbs.length + fehlend || 1),
-      zuletzt: last, alter, ampel: alter === null ? 'bad' : alter < 1.5 * T ? 'ok' : alter < 3 * T ? 'warn' : 'bad',
-      maxLuecke: Math.max(0, ...luecken.map(l => l.dauer)),
+      quote, zuletzt: last, alter, ampel, gruende,
+      maxLuecke: Math.max(0, ...luecken.filter(l => l.fehlend > 0).map(l => l.dauer - l.ausfall)),
       lqi: lqi.length ? { min: Math.min(...lqi), median: median(lqi), letzte: lqi[lqi.length - 1] } : null,
       spannung: mv.length ? { min: Math.min(...mv), max: Math.max(...mv), letzte: mv[mv.length - 1] } : null,
       lastSeen: ms.length ? ms[ms.length - 1].p.last_seen || null : null,
@@ -75,16 +108,17 @@ function analyse(rows, { from, to, names = {}, hourOf, dayOf }) {
     };
   });
   const order = k => ({ slot: 0, parcel: 1, letter: 2 }[k] ?? (k.startsWith('ref:') ? 9 : 5));
-  sensoren.sort((a, b) => order(a.key) - order(b.key) || a.key.localeCompare(b.key));
+  result.sort((a, b) => order(a.key) - order(b.key) || a.key.localeCompare(b.key));
+  const sensorenOut = result;
 
   // Lücken, die bei mehreren Sensoren gleichzeitig offen sind (Hinweis auf Coordinator)
-  const gleichzeitig = [];
-  for (let i = 0; i < sensoren.length; i++) for (let j = i + 1; j < sensoren.length; j++)
-    for (const a of sensoren[i].luecken) for (const b of sensoren[j].luecken) {
+  const S = sensorenOut, gleichzeitig = [];
+  for (let i = 0; i < S.length; i++) for (let j = i + 1; j < S.length; j++)
+    for (const a of S[i].luecken) for (const b of S[j].luecken) {
       const von = Math.max(a.von, b.von), bis = Math.min(a.bis ?? to, b.bis ?? to);
-      if (bis > von) gleichzeitig.push({ a: sensoren[i].name, b: sensoren[j].name, von, bis });
+      if (bis > von && bis - von > imAusfall(von, bis)) gleichzeitig.push({ a: S[i].name, b: S[j].name, von, bis });
     }
-  return { von: from, bis: to, sensoren, gleichzeitig };
+  return { von: from, bis: to, sensoren: S, ausfaelle, gleichzeitig };
 }
 
 module.exports = { analyse };

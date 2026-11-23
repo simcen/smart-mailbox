@@ -38,10 +38,14 @@
 </header>
 <main>
   <div class="card"><h2>Befund</h2><p class="befund" id="befund">…</p>
-    <p class="mute" style="margin:6px 0 0">Aqara-Sensoren melden sich etwa stündlich, auch ohne Kontaktwechsel. Jede fehlende Meldung im Raster ist ein verlorenes Paket. Die LQI zeigt nur Pakete, die angekommen sind; verlorene sieht man nur an den Lücken.</p></div>
+    <p class="mute" style="margin:6px 0 0">Aqara-Sensoren melden sich etwa stündlich, auch ohne Kontaktwechsel, und starten den Takt nach jeder Übertragung neu.
+    Jedes fehlende Lebenszeichen ist ein verlorenes Paket. Die LQI zeigt nur Pakete, die angekommen sind; verlorene sieht man nur an den Lücken.
+    Schweigen alle Sensoren gleichzeitig länger als 4 h, zählt das als Ausfall der Empfangskette (Dienst, Broker, Zigbee2MQTT, Coordinator) und nicht als Funkverlust.</p>
+    <p class="mute" style="margin:6px 0 0">Ampel: <b>rot</b> bei weniger als 70 % angekommen oder seit über 3 Intervallen still, <b>orange</b> unter 90 % oder über 1,5 Intervalle still, sonst grün.</p></div>
+  <div class="card"><h2>Ausfälle der Empfangskette (alle Sensoren still)</h2><div id="ausfall"></div></div>
   <div class="card"><h2>Sensoren</h2><div class="tiles" id="tiles"></div></div>
   <div class="card"><h2>Zeitstrahl</h2><div id="timeline"></div>
-    <div class="legend"><span><i style="background:var(--ok)"></i>Lebenszeichen (Farbe = LQI, heller = schwächer)</span><span><i style="background:var(--acc)"></i>Kontaktereignis</span><span><i style="background:var(--bad);border-radius:0"></i>Lücke</span></div></div>
+    <div class="legend"><span><i style="background:var(--ok)"></i>Lebenszeichen (Farbe = LQI, heller = schwächer)</span><span><i style="background:var(--acc)"></i>Kontaktereignis</span><span><i style="background:var(--bad);border-radius:0"></i>Lücke (Funkverlust)</span><span><i style="background:#c9cfcc;border-radius:0"></i>Ausfall Empfangskette</span></div></div>
   <div class="card"><h2>Fehlende Lebenszeichen nach Tageszeit</h2><table class="heat" id="heat"></table>
     <p class="mute" style="margin:6px 0 0">Anteil fehlend je Stunde (empfangen + fehlend = erwartet).</p></div>
   <div class="card"><h2>Pro Tag (empfangen / erwartet)</h2><table id="days"></table></div>
@@ -63,7 +67,8 @@ function befund(d) {
   const bk = d.sensoren.filter(s => !s.referenz), ref = d.sensoren.filter(s => s.referenz);
   const q = a => { const e = a.reduce((s, x) => s + x.lebenszeichen + x.fehlend, 0); return e ? a.reduce((s, x) => s + x.fehlend, 0) / e : 0; };
   const qb = q(bk), qr = ref.length ? q(ref) : null;
-  let t = `Briefkasten: ${pct(qb)} der Lebenszeichen fehlen`;
+  const aus = (d.ausfaelle || []).reduce((s, a) => s + a.dauer, 0);
+  let t = (aus ? `Empfangskette ${dauer(aus)} komplett still (separat ausgewiesen). ` : '') + `Briefkasten: ${pct(qb)} der Lebenszeichen fehlen`;
   if (qr === null) return t + '. Kein Vergleichssensor in den Daten (TOPIC_REFERENCE) – Coordinator-Störung nicht ausschliessbar.';
   t += `, Vergleichssensor: ${pct(qr)}. `;
   if (qb < 0.05 && qr < 0.05) return t + 'Funkstrecke unauffällig.';
@@ -80,10 +85,11 @@ function timeline(d) {
   for (let t = day0.getTime() / 1000 + 86400; t < d.bis; t += 86400) {
     s += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H - 18}" stroke="#dfe3e1"/><text x="${x(t) + 3}" y="${H - 5}" fill="#6a747b">${esc(fTag.format(new Date(t * 1000)))}</text>`;
   }
+  (d.ausfaelle || []).forEach(a => s += `<rect x="${x(a.von)}" y="0" width="${Math.max(1, x(a.bis) - x(a.von))}" height="${H - 18}" fill="#c9cfcc" opacity=".5"><title>Ausfall Empfangskette ${zeit(a.von)} – ${zeit(a.bis)} (${dauer(a.dauer)})</title></rect>`);
   d.sensoren.forEach((se, i) => {
     const y = i * rowH + rowH / 2;
     s += `<text x="0" y="${y + 4}" fill="#1d2327">${esc(se.name)}</text><line x1="${left}" x2="${W - right}" y1="${y}" y2="${y}" stroke="#eef1f0"/>`;
-    se.luecken.forEach(l => s += `<rect x="${x(Math.max(l.von, d.von))}" y="${y - 3}" width="${Math.max(1, x(l.bis ?? d.bis) - x(Math.max(l.von, d.von)))}" height="6" fill="#b83a32" opacity=".55"><title>Lücke ${zeit(l.von)} – ${l.bis ? zeit(l.bis) : 'jetzt'} (${dauer(l.dauer)}, ${l.fehlend} fehlend)</title></rect>`);
+    se.luecken.filter(l => l.fehlend > 0).forEach(l => s += `<rect x="${x(Math.max(l.von, d.von))}" y="${y - 3}" width="${Math.max(1, x(l.bis ?? d.bis) - x(Math.max(l.von, d.von)))}" height="6" fill="#b83a32" opacity=".55"><title>Lücke ${zeit(l.von)} – ${l.bis ? zeit(l.bis) : 'jetzt'} (${dauer(l.dauer)}, ${l.fehlend} fehlend)</title></rect>`);
     se.punkte.forEach(p => {
       const tip = `<title>${zeit(p.t)} · ${p.hb ? 'Lebenszeichen' : 'Kontaktereignis'} · LQI ${p.lqi ?? '?'} · ${p.mv ?? '?'} mV · ${p.contact === true ? 'zu' : p.contact === false ? 'offen' : '?'}${p.n > 1 ? ' · ' + p.n + ' Meldungen' : ''}</title>`;
       s += p.hb ? `<circle cx="${x(p.t)}" cy="${y}" r="3.5" fill="${lqiColor(p.lqi)}">${tip}</circle>`
@@ -102,11 +108,12 @@ async function load() {
   $('#befund').textContent = befund(d);
   $('#tiles').innerHTML = d.sensoren.map(s => `<div class="tile ${s.ampel}">
     <div><b>${esc(s.name)}</b> ${s.referenz ? '<span class="pill">Vergleich</span>' : ''}</div>
-    <div class="big">${pct(s.quote)}</div><div class="mute">Lebenszeichen angekommen</div>
+    <div class="big">${pct(s.quote)}</div><div class="mute">Lebenszeichen angekommen (ohne Ausfälle)</div>
+    ${s.gruende.length ? '<div style="margin-top:4px">' + s.gruende.map(g => `<span class="pill ${g.startsWith('rot') ? 'bad' : 'warn'}">${esc(g.replace(/^(rot|orange): /, ''))}</span>`).join(' ') + '</div>' : ''}
     <dl><dt>Zuletzt</dt><dd><span class="pill ${s.ampel}">vor ${dauer(s.alter)}</span></dd>
     <dt>Intervall</dt><dd>${dauer(s.intervall)}</dd>
     <dt>Empfangen</dt><dd>${s.lebenszeichen} · ${s.fehlend} fehlend</dd>
-    <dt>Grösste Lücke</dt><dd>${dauer(s.maxLuecke)}</dd>
+    <dt>Grösste Funklücke</dt><dd>${dauer(s.maxLuecke)}</dd>
     <dt>LQI</dt><dd>${s.lqi ? `min ${s.lqi.min} · Median ${s.lqi.median} · letzte ${s.lqi.letzte}` : '–'}</dd>
     <dt>Spannung</dt><dd>${s.spannung ? `${s.spannung.letzte} mV (min ${s.spannung.min})` : '–'}</dd>
     <dt>Topic</dt><dd><code style="font-size:11px">${esc(s.topic)}</code></dd></dl></div>`).join('');
@@ -120,9 +127,11 @@ async function load() {
   $('#days').innerHTML = '<tr><th>Tag</th>' + d.sensoren.map(s => `<th class="num">${esc(s.name)}</th>`).join('') + '</tr>' + days.map(day =>
     `<tr><td>${esc(day)}</td>` + d.sensoren.map(s => { const x = s.tage[day]; if (!x) return '<td class="num mute">–</td>'; const e = x.empfangen + x.fehlend;
       return `<td class="num">${x.empfangen} / ${e} <span class="pill ${x.fehlend / e > .25 ? 'bad' : x.fehlend ? 'warn' : 'ok'}">${pct(x.empfangen / e)}</span></td>`; }).join('') + '</tr>').join('');
-  const gaps = d.sensoren.flatMap(s => s.luecken.map(l => Object.assign({ name: s.name }, l))).sort((a, b) => b.von - a.von);
-  $('#gaps').innerHTML = '<tr><th>Sensor</th><th>Von</th><th>Bis</th><th class="num">Dauer</th><th class="num">fehlend</th></tr>' + (gaps.length ? gaps.map(g =>
-    `<tr><td>${esc(g.name)}</td><td>${zeit(g.von)}</td><td>${g.bis ? zeit(g.bis) : '<span class="pill bad">noch offen</span>'}</td><td class="num">${dauer(g.dauer)}</td><td class="num">${g.fehlend}</td></tr>`).join('') : '<tr><td colspan="5" class="mute">keine</td></tr>');
+  const gaps = d.sensoren.flatMap(s => s.luecken.filter(l => l.fehlend > 0).map(l => Object.assign({ name: s.name }, l))).sort((a, b) => b.von - a.von);
+  $('#gaps').innerHTML = '<tr><th>Sensor</th><th>Von</th><th>Bis</th><th class="num">Dauer</th><th class="num">davon Ausfall</th><th class="num">fehlend (Funk)</th></tr>' + (gaps.length ? gaps.map(g =>
+    `<tr><td>${esc(g.name)}</td><td>${zeit(g.von)}</td><td>${g.bis ? zeit(g.bis) : '<span class="pill bad">noch offen</span>'}</td><td class="num">${dauer(g.dauer)}</td><td class="num">${g.ausfall ? dauer(g.ausfall) : '–'}</td><td class="num">${g.fehlend}</td></tr>`).join('') : '<tr><td colspan="6" class="mute">keine</td></tr>');
+  $('#ausfall').innerHTML = d.ausfaelle.length ? '<table><tr><th>Von</th><th>Bis</th><th class="num">Dauer</th></tr>' + d.ausfaelle.slice().reverse().map(a =>
+    `<tr><td>${zeit(a.von)}</td><td>${zeit(a.bis)}</td><td class="num">${dauer(a.dauer)}</td></tr>`).join('') + '</table><p class="mute" style="margin:6px 0 0">Ohne Vergleichssensor lässt sich nicht unterscheiden, ob der Dienst, der Broker, Zigbee2MQTT oder der Coordinator stand.</p>' : '<p class="mute">keine</p>';
   $('#same').innerHTML = d.gleichzeitig.length ? '<table><tr><th>Sensoren</th><th>Von</th><th>Bis</th></tr>' + d.gleichzeitig.sort((a, b) => b.von - a.von).slice(0, 50).map(g =>
     `<tr><td>${esc(g.a)} &amp; ${esc(g.b)}</td><td>${zeit(g.von)}</td><td>${zeit(g.bis)}</td></tr>`).join('') + '</table>' : '<p class="mute">keine</p>';
 }
