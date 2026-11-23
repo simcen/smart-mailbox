@@ -50,6 +50,20 @@ Ohne `PGHOST`/`DATABASE_URL` schreibt der Dienst dieselben Daten als JSONL-Datei
 «Stimmt» oder «Falsch, real war: …» mit der Aktion, die wirklich passiert ist. Die Bewertung ändert den Status nicht; dafür gibt es «Status korrigieren».
 Die Seite hat keine Anmeldung und gehört nur ins LAN. `/health` ist der Healthcheck.
 
+## Funkdiagnose
+
+Der Dienst legt jede Meldung auf den Sensor-Topics mit Empfangszeit und kompletter Payload ab (Tabelle `messages`).
+Mit `TOPIC_REFERENCE` (Komma-Liste) schreibt er zusätzlich Vergleichssensoren mit, ohne sie auszuwerten, z.B. `zigbee2mqtt/w8a-tk-z08-west`.
+
+```
+curl -s 'http://<host>:3180/api/messages?since=2026-11-18T00:00:00Z' > messages.ndjson
+node tools/funk-analyse.js messages.ndjson [--temp aussentemp.csv] > funk-bericht.md
+```
+
+Das Skript ermittelt pro Sensor das Lebenszeichen-Intervall, Lücken, LQI- und Spannungsverlauf, verlorene Kontaktmeldungen
+(zwei gleiche Zustände hintereinander ausserhalb des Lebenszeichen-Rasters) und gleichzeitige Lücken, und ordnet das Ergebnis
+dem Entscheidungsbaum Funk / Coordinator / Mechanik / Batterie zu. `--temp` nimmt eine CSV `zeit,temperatur` (z.B. Ecowitt aus Home Assistant).
+
 ## Coolify
 
 1. Ordner in ein Git-Repository legen.

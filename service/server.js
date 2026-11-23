@@ -18,6 +18,8 @@ const DATA = env.DATA_DIR || path.join(__dirname, '..', 'data');
 const TZ = env.TZ || 'Europe/Zurich';
 const TOPICS = { slot: env.TOPIC_SLOT, parcel: env.TOPIC_PARCEL, letter: env.TOPIC_LETTER || '' };
 const TOPIC_PRESENCE = env.TOPIC_PRESENCE || '';
+// Vergleichssensoren für die Funkdiagnose: nur mitschreiben, nicht auswerten (Komma-Liste, z.B. zigbee2mqtt/w8a-tk-z08-west)
+const TOPIC_REFERENCE = (env.TOPIC_REFERENCE || '').split(',').map(s => s.trim()).filter(Boolean);
 const CONTACT_FIELD = env.CONTACT_FIELD || 'contact';
 const HISTORY = 12;
 const LOW_VOLTAGE_MV = num('LOW_VOLTAGE_MV', 2850);   // darunter gilt die Batterie als schwach
@@ -141,6 +143,7 @@ client.on('connect', () => {
   pub(BASE + '/online', 'online');
   Object.values(TOPICS).filter(Boolean).forEach(t => client.subscribe(t));
   if (TOPIC_PRESENCE) client.subscribe(TOPIC_PRESENCE);
+  TOPIC_REFERENCE.forEach(t => client.subscribe(t));
   client.subscribe(BASE + '/cmd/#');
   publishDiscovery();
   publishAll();
@@ -153,6 +156,9 @@ client.on('message', (topic, buf) => {
   const t = now();
   if (topic.startsWith(BASE + '/cmd/')) return command(topic.slice(BASE.length + 5), buf.toString().trim(), t);
   if (topic === TOPIC_PRESENCE) { const o = parseOpen(buf); if (o !== null) presence = o; return; }
+  if (TOPIC_REFERENCE.includes(topic)) {                // Vergleichssensor: nur ablegen
+    return store.addMessage({ t: +t.toFixed(3), zeit: stamp(t), sensor: 'ref:' + topic.split('/').pop(), topic, payload: buf.toString().slice(0, 500), ergebnis: 'Vergleichssensor', isEvent: false });
+  }
   const sensor = Object.keys(TOPICS).find(k => TOPICS[k] === topic);
   if (!sensor) return;
   try {
@@ -336,6 +342,12 @@ const server = http.createServer(async (req, res) => {
   if (url === '/api/empfang') return json(200, { sensoren: rx, letzte: rxLog });
   if (url === '/api/status') return json(200, logic.payload());
   if (url === '/api/events') return send(200, 'application/x-ndjson', await store.eventsNdjson());
+  if (url === '/api/messages') {                       // Rohmeldungen als NDJSON, optional ?since=2026-11-18T00:00:00Z
+    const q = new URLSearchParams(req.url.split('?')[1] || ''), since = q.get('since') ? new Date(q.get('since')) : null;
+    if (since && isNaN(since)) return json(400, { fehler: 'since ist kein Datum' });
+    res.setHeader('content-disposition', 'attachment; filename="messages.ndjson"');
+    return send(200, 'application/x-ndjson', await store.messagesNdjson(since));
+  }
   if (url === '/') return send(200, 'text/html', PAGE);
   send(404, 'text/plain', 'not found');
 });

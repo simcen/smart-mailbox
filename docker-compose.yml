@@ -13,6 +13,7 @@ services:
       TOPIC_SLOT: ${TOPIC_SLOT:-zigbee2mqtt/briefkasten_schlitz}
       TOPIC_PARCEL: ${TOPIC_PARCEL:-zigbee2mqtt/briefkasten_paketfach}
       TOPIC_LETTER: ${TOPIC_LETTER:-zigbee2mqtt/briefkasten_brieffach}
+      TOPIC_REFERENCE: ${TOPIC_REFERENCE:-}
       WINDOWS: ${WINDOWS:-05:00-07:00,11:30-14:30}
       PGHOST: db
       PGUSER: mailbox
