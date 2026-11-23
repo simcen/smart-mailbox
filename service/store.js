@@ -43,6 +43,9 @@ function fileStore(dir) {
     addEvent(e) { append('events.jsonl', e); },
     addMessage(m) { append('messages.jsonl', m); },
     async eventsNdjson() { return fs.existsSync(F('events.jsonl')) ? fs.readFileSync(F('events.jsonl'), 'utf8') : ''; },
+    async messagesSince(since) {
+      return lines('messages.jsonl').filter(m => m.t * 1000 >= since.getTime()).map(m => ({ t: m.t, sensor: m.sensor, topic: m.topic, payload: m.payload }));
+    },
     async messagesNdjson(since) {
       return lines('messages.jsonl').filter(m => !since || m.t * 1000 >= since.getTime())
         .map(m => JSON.stringify({ ts: new Date(m.t * 1000).toISOString(), sensor: m.sensor, topic: m.topic, payload: m.payload, ergebnis: m.ergebnis, is_event: m.isEvent })).join('\n') + '\n';
@@ -105,6 +108,10 @@ function pgStore(url) {
     async eventsNdjson() {
       const r = await pool.query('select t, zeit, sensor, open from events order by id');
       return r.rows.map(x => JSON.stringify(x)).join('\n') + (r.rows.length ? '\n' : '');
+    },
+    async messagesSince(since) {
+      const r = await pool.query('select extract(epoch from ts)::float8 as t, sensor, topic, payload from messages where ts >= $1 order by id', [since]);
+      return r.rows;
     },
     async messagesNdjson(since) {
       const r = await pool.query('select ts, sensor, topic, payload, ergebnis, is_event from messages where ts >= $1 order by id', [since || new Date(0)]);

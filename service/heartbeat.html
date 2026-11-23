@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Briefkasten-Diagnose · Lebenszeichen</title>
+<style>
+  :root { --bg:#f3f4f2; --card:#fff; --ink:#1d2327; --mute:#6a747b; --line:#dfe3e1; --ok:#2f7d4f; --warn:#b7791f; --bad:#b83a32; --acc:#1f5f8b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:12px 18px; background:var(--card); border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; } h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 10px; }
+  main { max-width:1200px; margin:auto; padding:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; overflow-x:auto; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:99px; background:#eef1f0; font-size:12px; }
+  .pill.ok { background:#e2f2e8; color:var(--ok); } .pill.bad { background:#fbe4e2; color:var(--bad); } .pill.warn { background:#fdf3dc; color:var(--warn); }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:10px; }
+  .tile { border:1px solid var(--line); border-left:5px solid var(--mute); border-radius:8px; padding:10px 12px; }
+  .tile.ok { border-left-color:var(--ok); } .tile.warn { border-left-color:var(--warn); } .tile.bad { border-left-color:var(--bad); }
+  .tile .big { font-size:24px; font-weight:600; } .tile dl { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; margin:6px 0 0; font-size:13px; }
+  .tile dt { color:var(--mute); } .tile dd { margin:0; }
+  table { border-collapse:collapse; width:100%; } th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--mute); font-weight:600; } td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  select { font:inherit; border:1px solid var(--line); background:#fafbfa; border-radius:6px; padding:4px 9px; }
+  .mute { color:var(--mute); } a { color:var(--acc); }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--mute); margin-top:6px; } .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:-1px; }
+  .heat td { padding:0; height:22px; min-width:22px; text-align:center; font-size:11px; border:1px solid #fff; }
+  .befund { font-size:15px; margin:0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Briefkasten-Diagnose · Lebenszeichen</h1>
+  <a href="/">← Übersicht</a>
+  <label class="mute">Zeitraum <select id="tage"><option>1</option><option>3</option><option selected>7</option><option>14</option><option>30</option></select> Tage</label>
+  <span id="clock" class="mute"></span>
+  <span class="mute">· <a id="export" href="/api/messages">Rohmeldungen (NDJSON)</a></span>
+</header>
+<main>
+  <div class="card"><h2>Befund</h2><p class="befund" id="befund">…</p>
+    <p class="mute" style="margin:6px 0 0">Aqara-Sensoren melden sich etwa stündlich, auch ohne Kontaktwechsel. Jede fehlende Meldung im Raster ist ein verlorenes Paket. Die LQI zeigt nur Pakete, die angekommen sind; verlorene sieht man nur an den Lücken.</p></div>
+  <div class="card"><h2>Sensoren</h2><div class="tiles" id="tiles"></div></div>
+  <div class="card"><h2>Zeitstrahl</h2><div id="timeline"></div>
+    <div class="legend"><span><i style="background:var(--ok)"></i>Lebenszeichen (Farbe = LQI, heller = schwächer)</span><span><i style="background:var(--acc)"></i>Kontaktereignis</span><span><i style="background:var(--bad);border-radius:0"></i>Lücke</span></div></div>
+  <div class="card"><h2>Fehlende Lebenszeichen nach Tageszeit</h2><table class="heat" id="heat"></table>
+    <p class="mute" style="margin:6px 0 0">Anteil fehlend je Stunde (empfangen + fehlend = erwartet).</p></div>
+  <div class="card"><h2>Pro Tag (empfangen / erwartet)</h2><table id="days"></table></div>
+  <div class="card"><h2>Lücken</h2><table id="gaps"></table></div>
+  <div class="card"><h2>Gleichzeitige Lücken bei mehreren Sensoren</h2><div id="same"></div></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const TZ = 'Europe/Zurich';
+const fZeit = new Intl.DateTimeFormat('de-CH', { timeZone: TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const fTag = new Intl.DateTimeFormat('de-CH', { timeZone: TZ, weekday: 'short', day: '2-digit', month: '2-digit' });
+const zeit = t => t == null ? '–' : fZeit.format(new Date(t * 1000)).replace(',', '');
+const dauer = s => s == null ? '–' : s >= 86400 ? (s / 86400).toFixed(1) + ' d' : s >= 3600 ? (s / 3600).toFixed(1) + ' h' : Math.round(s / 60) + ' min';
+const pct = x => Math.round(100 * x) + ' %';
+const lqiColor = l => l == null ? '#9aa' : `hsl(${Math.max(0, Math.min(130, (l - 100) * 0.85))} 55% ${l >= 200 ? 38 : 50}%)`;
+
+function befund(d) {
+  const bk = d.sensoren.filter(s => !s.referenz), ref = d.sensoren.filter(s => s.referenz);
+  const q = a => { const e = a.reduce((s, x) => s + x.lebenszeichen + x.fehlend, 0); return e ? a.reduce((s, x) => s + x.fehlend, 0) / e : 0; };
+  const qb = q(bk), qr = ref.length ? q(ref) : null;
+  let t = `Briefkasten: ${pct(qb)} der Lebenszeichen fehlen`;
+  if (qr === null) return t + '. Kein Vergleichssensor in den Daten (TOPIC_REFERENCE) – Coordinator-Störung nicht ausschliessbar.';
+  t += `, Vergleichssensor: ${pct(qr)}. `;
+  if (qb < 0.05 && qr < 0.05) return t + 'Funkstrecke unauffällig.';
+  if (qr >= 0.1 && qr >= qb / 2) return t + '→ Verluste auch im Haus: Coordinator/Störung am Server prüfen (USB-2.0-Verlängerung, Stick aus dem Rack).';
+  return t + '→ Verluste nur am Briefkasten: Funkweg zum Briefkasten (Router in Briefkastennähe).';
+}
+
+function timeline(d) {
+  const W = 1100, rowH = 34, left = 120, right = 10, H = d.sensoren.length * rowH + 24;
+  const x = t => left + (t - d.von) / (d.bis - d.von) * (W - left - right);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:700px" font-size="11">`;
+  // Tagestrennlinien um Mitternacht (lokal)
+  const day0 = new Date(d.von * 1000); day0.setHours(0, 0, 0, 0);
+  for (let t = day0.getTime() / 1000 + 86400; t < d.bis; t += 86400) {
+    s += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${H - 18}" stroke="#dfe3e1"/><text x="${x(t) + 3}" y="${H - 5}" fill="#6a747b">${esc(fTag.format(new Date(t * 1000)))}</text>`;
+  }
+  d.sensoren.forEach((se, i) => {
+    const y = i * rowH + rowH / 2;
+    s += `<text x="0" y="${y + 4}" fill="#1d2327">${esc(se.name)}</text><line x1="${left}" x2="${W - right}" y1="${y}" y2="${y}" stroke="#eef1f0"/>`;
+    se.luecken.forEach(l => s += `<rect x="${x(Math.max(l.von, d.von))}" y="${y - 3}" width="${Math.max(1, x(l.bis ?? d.bis) - x(Math.max(l.von, d.von)))}" height="6" fill="#b83a32" opacity=".55"><title>Lücke ${zeit(l.von)} – ${l.bis ? zeit(l.bis) : 'jetzt'} (${dauer(l.dauer)}, ${l.fehlend} fehlend)</title></rect>`);
+    se.punkte.forEach(p => {
+      const tip = `<title>${zeit(p.t)} · ${p.hb ? 'Lebenszeichen' : 'Kontaktereignis'} · LQI ${p.lqi ?? '?'} · ${p.mv ?? '?'} mV · ${p.contact === true ? 'zu' : p.contact === false ? 'offen' : '?'}${p.n > 1 ? ' · ' + p.n + ' Meldungen' : ''}</title>`;
+      s += p.hb ? `<circle cx="${x(p.t)}" cy="${y}" r="3.5" fill="${lqiColor(p.lqi)}">${tip}</circle>`
+                : `<path d="M${x(p.t)} ${y - 11}l4 7h-8z" fill="#1f5f8b">${tip}</path>`;
+    });
+  });
+  return s + '</svg>';
+}
+
+async function load() {
+  const tage = $('#tage').value;
+  $('#export').href = '/api/messages?since=' + new Date(Date.now() - tage * 86400e3).toISOString();
+  const d = await (await fetch('/api/heartbeat?tage=' + tage)).json();
+  $('#clock').textContent = 'Stand ' + zeit(d.bis) + ' · ab ' + zeit(d.von);
+  if (!d.sensoren.length) { $('#befund').textContent = 'Keine Meldungen im Zeitraum.'; return; }
+  $('#befund').textContent = befund(d);
+  $('#tiles').innerHTML = d.sensoren.map(s => `<div class="tile ${s.ampel}">
+    <div><b>${esc(s.name)}</b> ${s.referenz ? '<span class="pill">Vergleich</span>' : ''}</div>
+    <div class="big">${pct(s.quote)}</div><div class="mute">Lebenszeichen angekommen</div>
+    <dl><dt>Zuletzt</dt><dd><span class="pill ${s.ampel}">vor ${dauer(s.alter)}</span></dd>
+    <dt>Intervall</dt><dd>${dauer(s.intervall)}</dd>
+    <dt>Empfangen</dt><dd>${s.lebenszeichen} · ${s.fehlend} fehlend</dd>
+    <dt>Grösste Lücke</dt><dd>${dauer(s.maxLuecke)}</dd>
+    <dt>LQI</dt><dd>${s.lqi ? `min ${s.lqi.min} · Median ${s.lqi.median} · letzte ${s.lqi.letzte}` : '–'}</dd>
+    <dt>Spannung</dt><dd>${s.spannung ? `${s.spannung.letzte} mV (min ${s.spannung.min})` : '–'}</dd>
+    <dt>Topic</dt><dd><code style="font-size:11px">${esc(s.topic)}</code></dd></dl></div>`).join('');
+  $('#timeline').innerHTML = timeline(d);
+  $('#heat').innerHTML = '<tr><th></th>' + Array.from({ length: 24 }, (_, h) => `<th style="text-align:center">${h}</th>`).join('') + '</tr>' +
+    d.sensoren.map(s => '<tr><th style="padding-right:8px">' + esc(s.name) + '</th>' + s.stunden.map(h => {
+      const e = h.empfangen + h.fehlend, r = e ? h.fehlend / e : 0;
+      return `<td title="${h.fehlend} von ${e} fehlend" style="background:${e ? `rgba(184,58,50,${0.08 + 0.85 * r})` : '#f6f7f6'};color:${r > .5 ? '#fff' : '#1d2327'}">${e ? Math.round(100 * r) : ''}</td>`;
+    }).join('') + '</tr>').join('');
+  const days = [...new Set(d.sensoren.flatMap(s => Object.keys(s.tage)))].sort();
+  $('#days').innerHTML = '<tr><th>Tag</th>' + d.sensoren.map(s => `<th class="num">${esc(s.name)}</th>`).join('') + '</tr>' + days.map(day =>
+    `<tr><td>${esc(day)}</td>` + d.sensoren.map(s => { const x = s.tage[day]; if (!x) return '<td class="num mute">–</td>'; const e = x.empfangen + x.fehlend;
+      return `<td class="num">${x.empfangen} / ${e} <span class="pill ${x.fehlend / e > .25 ? 'bad' : x.fehlend ? 'warn' : 'ok'}">${pct(x.empfangen / e)}</span></td>`; }).join('') + '</tr>').join('');
+  const gaps = d.sensoren.flatMap(s => s.luecken.map(l => Object.assign({ name: s.name }, l))).sort((a, b) => b.von - a.von);
+  $('#gaps').innerHTML = '<tr><th>Sensor</th><th>Von</th><th>Bis</th><th class="num">Dauer</th><th class="num">fehlend</th></tr>' + (gaps.length ? gaps.map(g =>
+    `<tr><td>${esc(g.name)}</td><td>${zeit(g.von)}</td><td>${g.bis ? zeit(g.bis) : '<span class="pill bad">noch offen</span>'}</td><td class="num">${dauer(g.dauer)}</td><td class="num">${g.fehlend}</td></tr>`).join('') : '<tr><td colspan="5" class="mute">keine</td></tr>');
+  $('#same').innerHTML = d.gleichzeitig.length ? '<table><tr><th>Sensoren</th><th>Von</th><th>Bis</th></tr>' + d.gleichzeitig.sort((a, b) => b.von - a.von).slice(0, 50).map(g =>
+    `<tr><td>${esc(g.a)} &amp; ${esc(g.b)}</td><td>${zeit(g.von)}</td><td>${zeit(g.bis)}</td></tr>`).join('') + '</table>' : '<p class="mute">keine</p>';
+}
+$('#tage').addEventListener('change', load);
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

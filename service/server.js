@@ -9,6 +9,7 @@ const http = require('http');
 const mqtt = require('mqtt');
 const { Logic } = require('../mailbox-logic.js');
 const createStore = require('./store.js');
+const heartbeat = require('./heartbeat.js');
 
 const env = process.env;
 const num = (k, d) => (env[k] !== undefined && env[k] !== '' ? Number(env[k]) : d);
@@ -314,6 +315,9 @@ setInterval(publishAll, 60000); // Zustellfenster / Lebenszeichen
 
 // ---------- HTTP: Health + Diagnose + Bewertung ----------
 const PAGE = fs.readFileSync(path.join(__dirname, 'page.html'), 'utf8');
+const HB_PAGE = fs.readFileSync(path.join(__dirname, 'heartbeat.html'), 'utf8');
+const fmtHour = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
+const fmtDay = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });   // JJJJ-MM-TT, sortierbar
 function body(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e5) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch (e) { r(null); } }); }); }
 const server = http.createServer(async (req, res) => {
   const send = (code, type, b) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
@@ -349,6 +353,15 @@ const server = http.createServer(async (req, res) => {
     return send(200, 'application/x-ndjson', await store.messagesNdjson(since));
   }
   if (url === '/') return send(200, 'text/html', PAGE);
+  if (url === '/lebenszeichen') return send(200, 'text/html', HB_PAGE);
+  if (url === '/api/heartbeat') {                     // Lebenszeichen-Auswertung, ?tage=7
+    const tage = Math.min(60, Math.max(0.25, Number(new URLSearchParams(req.url.split('?')[1] || '').get('tage')) || 7));
+    const to = now(), from = to - tage * 86400;
+    const rows = await store.messagesSince(new Date(from * 1000));
+    return json(200, heartbeat.analyse(rows, { from, to, names: NAME,
+      hourOf: t => +fmtHour.formatToParts(new Date(t * 1000)).find(x => x.type === 'hour').value % 24,
+      dayOf: t => fmtDay.format(new Date(t * 1000)) }));
+  }
   send(404, 'text/plain', 'not found');
 });
 
