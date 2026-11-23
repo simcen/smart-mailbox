@@ -64,12 +64,13 @@ const pct = x => Math.round(100 * x) + ' %';
 const lqiColor = l => l == null ? '#9aa' : `hsl(${Math.max(0, Math.min(130, (l - 100) * 0.85))} 55% ${l >= 200 ? 38 : 50}%)`;
 
 function befund(d) {
-  const bk = d.sensoren.filter(s => !s.referenz), ref = d.sensoren.filter(s => s.referenz);
+  const bk = d.sensoren.filter(s => !s.referenz && !s.leer), ref = d.sensoren.filter(s => s.referenz && !s.leer);
+  const refLeer = d.sensoren.filter(s => s.referenz && s.leer);
   const q = a => { const e = a.reduce((s, x) => s + x.lebenszeichen + x.fehlend, 0); return e ? a.reduce((s, x) => s + x.fehlend, 0) / e : 0; };
   const qb = q(bk), qr = ref.length ? q(ref) : null;
   const aus = (d.ausfaelle || []).reduce((s, a) => s + a.dauer, 0);
   let t = (aus ? `Empfangskette ${dauer(aus)} komplett still (separat ausgewiesen). ` : '') + `Briefkasten: ${pct(qb)} der Lebenszeichen fehlen`;
-  if (qr === null) return t + '. Kein Vergleichssensor in den Daten (TOPIC_REFERENCE) – Coordinator-Störung nicht ausschliessbar.';
+  if (qr === null) return t + (refLeer.length ? `. Vergleichssensor ${refLeer.map(s => s.name).join(', ')} ist eingerichtet, hat aber im Zeitraum noch nichts gemeldet.` : '. Kein Vergleichssensor in den Daten (TOPIC_REFERENCE) – Coordinator-Störung nicht ausschliessbar.');
   t += `, Vergleichssensor: ${pct(qr)}. `;
   if (qb < 0.05 && qr < 0.05) return t + 'Funkstrecke unauffällig.';
   if (qr >= 0.1 && qr >= qb / 2) return t + '→ Verluste auch im Haus: Coordinator/Störung am Server prüfen (USB-2.0-Verlängerung, Stick aus dem Rack).';
@@ -108,9 +109,9 @@ async function load() {
   $('#befund').textContent = befund(d);
   $('#tiles').innerHTML = d.sensoren.map(s => `<div class="tile ${s.ampel}">
     <div><b>${esc(s.name)}</b> ${s.referenz ? '<span class="pill">Vergleich</span>' : ''}</div>
-    <div class="big">${pct(s.quote)}</div><div class="mute">Lebenszeichen angekommen (ohne Ausfälle)</div>
+    <div class="big">${s.leer ? '–' : pct(s.quote)}</div><div class="mute">Lebenszeichen angekommen (ohne Ausfälle)</div>
     ${s.gruende.length ? '<div style="margin-top:4px">' + s.gruende.map(g => `<span class="pill ${g.startsWith('rot') ? 'bad' : 'warn'}">${esc(g.replace(/^(rot|orange): /, ''))}</span>`).join(' ') + '</div>' : ''}
-    <dl><dt>Zuletzt</dt><dd><span class="pill ${s.ampel}">vor ${dauer(s.alter)}</span></dd>
+    <dl><dt>Zuletzt</dt><dd><span class="pill ${s.ampel}">${s.alter == null ? 'nichts im Zeitraum' : 'vor ' + dauer(s.alter)}</span></dd>
     <dt>Intervall</dt><dd>${dauer(s.intervall)}</dd>
     <dt>Empfangen</dt><dd>${s.lebenszeichen} · ${s.fehlend} fehlend</dd>
     <dt>Grösste Funklücke</dt><dd>${dauer(s.maxLuecke)}</dd>

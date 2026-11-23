@@ -19,7 +19,7 @@ const AUSFALL = 4 * 3600;
 
 const median = a => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
 
-function analyse(rows, { from, to, names = {}, hourOf, dayOf }) {
+function analyse(rows, { from, to, names = {}, hourOf, dayOf, konfiguriert = [] }) {
   const by = {};
   for (const r of rows) {
     let p = {}; try { p = JSON.parse(r.payload); } catch (e) { /* kein JSON */ }
@@ -107,6 +107,12 @@ function analyse(rows, { from, to, names = {}, hourOf, dayOf }) {
       punkte: wakes.map(w => ({ t: w.t, hb: w.hb, lqi: w.p.linkquality ?? null, mv: w.p.voltage ?? null, contact: w.p.contact ?? null, n: w.n }))
     };
   });
+  // konfigurierte Sensoren ohne Meldung im Zeitraum trotzdem zeigen
+  for (const c of konfiguriert) if (!result.some(r => r.key === c.key)) result.push({
+    key: c.key, name: names[c.key] || c.key.replace(/^ref:/, ''), referenz: c.key.startsWith('ref:'), topic: c.topic, leer: true,
+    intervall: DEFAULT_T, meldungen: 0, lebenszeichen: 0, erwartet: 0, fehlend: 0, quote: 0, zuletzt: null, alter: null,
+    ampel: 'bad', gruende: ['rot: keine Meldung im Zeitraum'], maxLuecke: 0, lqi: null, spannung: null, lastSeen: null,
+    luecken: [], tage: {}, stunden: Array.from({ length: 24 }, () => ({ empfangen: 0, fehlend: 0 })), punkte: [] });
   const order = k => ({ slot: 0, parcel: 1, letter: 2 }[k] ?? (k.startsWith('ref:') ? 9 : 5));
   result.sort((a, b) => order(a.key) - order(b.key) || a.key.localeCompare(b.key));
   const sensorenOut = result;

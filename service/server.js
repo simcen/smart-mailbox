@@ -358,7 +358,9 @@ const server = http.createServer(async (req, res) => {
     const tage = Math.min(60, Math.max(0.25, Number(new URLSearchParams(req.url.split('?')[1] || '').get('tage')) || 7));
     const to = now(), from = to - tage * 86400;
     const rows = await store.messagesSince(new Date(from * 1000));
-    return json(200, heartbeat.analyse(rows, { from, to, names: NAME,
+    const konfiguriert = Object.keys(TOPICS).filter(k => TOPICS[k]).map(k => ({ key: k, topic: TOPICS[k] }))
+      .concat(TOPIC_REFERENCE.map(t => ({ key: 'ref:' + t.split('/').pop(), topic: t })));
+    return json(200, heartbeat.analyse(rows, { from, to, names: NAME, konfiguriert,
       hourOf: t => +fmtHour.formatToParts(new Date(t * 1000)).find(x => x.type === 'hour').value % 24,
       dayOf: t => fmtDay.format(new Date(t * 1000)) }));
   }
