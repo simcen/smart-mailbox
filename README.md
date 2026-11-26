@@ -64,6 +64,12 @@ Das Skript ermittelt pro Sensor das Lebenszeichen-Intervall, Lücken, LQI- und S
 (zwei gleiche Zustände hintereinander ausserhalb des Lebenszeichen-Rasters) und gleichzeitige Lücken, und ordnet das Ergebnis
 dem Entscheidungsbaum Funk / Coordinator / Mechanik / Batterie zu. `--temp` nimmt eine CSV `zeit,temperatur` (z.B. Ecowitt aus Home Assistant).
 
+## Zugriffsschutz
+
+Ist der Dienst über eine Domain erreichbar, `DASHBOARD_USER` und `DASHBOARD_PASSWORD` setzen: Dann verlangen alle Seiten und die API eine Anmeldung (Basic Auth), ausser `/health`.
+Direkte Zugriffe im LAN auf den Host-Port (ohne Reverse Proxy, erkennbar an fehlendem `X-Forwarded-For`) bleiben offen.
+`HEARTBEAT_TOKEN` erlaubt zusätzlich nur `GET /api/heartbeat?token=…` bzw. `Authorization: Bearer …`, etwa für einen automatischen Funkcheck.
+
 ## Coolify
 
 1. Ordner in ein Git-Repository legen.

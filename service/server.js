@@ -10,6 +10,7 @@ const mqtt = require('mqtt');
 const { Logic } = require('../mailbox-logic.js');
 const createStore = require('./store.js');
 const heartbeat = require('./heartbeat.js');
+const createAuth = require('./auth.js');
 
 const env = process.env;
 const num = (k, d) => (env[k] !== undefined && env[k] !== '' ? Number(env[k]) : d);
@@ -319,10 +320,13 @@ const HB_PAGE = fs.readFileSync(path.join(__dirname, 'heartbeat.html'), 'utf8');
 const fmtHour = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' });
 const fmtDay = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });   // JJJJ-MM-TT, sortierbar
 function body(req) { return new Promise(r => { let d = ''; req.on('data', c => { d += c; if (d.length > 1e5) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch (e) { r(null); } }); }); }
+const auth = createAuth(env);
+if (!auth.enabled) console.warn('Hinweis: DASHBOARD_USER/DASHBOARD_PASSWORD nicht gesetzt – Diagnose-Seiten sind ohne Anmeldung erreichbar.');
 const server = http.createServer(async (req, res) => {
   const send = (code, type, b) => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(b); };
   const json = (code, o) => send(code, 'application/json', JSON.stringify(o));
   const url = req.url.split('?')[0];
+  if (!auth.check(req, res, url)) return;
   if (url === '/health') return json(client.connected ? 200 : 503, { mqtt: client.connected, version: VERSION, gestartet: stamp(START) });
   if (req.method === 'POST') {
     const b = await body(req), t = now();
